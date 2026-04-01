@@ -1,139 +1,208 @@
-# BESS Optimality Tool — Elektron RE
-## Sub-MWh Battery Storage Optimisation · FastAPI + PostgreSQL + React
+# BESS Optimality Tool
 
----
+FastAPI + PostgreSQL + React/Vite application for BESS sizing, financial analysis, BOM generation, supplier scoring, and comparison workflows.
+
+## What This App Runs
+
+- `postgres` service: stores all persistent app data
+- `backend` service: FastAPI APIs on port `8000`
+- `frontend` service: React UI on port `3000`
 
 ## Project Structure
 
-```
+```text
 bess_app/
-├── backend/
-│   ├── main.py          ← FastAPI app + all calculation engine
-│   ├── models.py        ← SQLAlchemy ORM models (PostgreSQL)
-│   ├── crud.py          ← Database read/write operations
-│   ├── database.py      ← DB connection config
-│   ├── requirements.txt
-│   └── Dockerfile
-├── frontend/
-│   ├── src/
-│   │   ├── BESSApp.jsx  ← Full React dashboard (9 tabs)
-│   │   ├── BESSApp.css  ← Industrial dark theme CSS
-│   │   └── main.jsx     ← React entry point
-│   ├── index.html
-│   ├── vite.config.js
-│   ├── package.json
-│   └── Dockerfile
-└── docker-compose.yml
+|-- docker-compose.yml
+|-- .env.example
+|-- backend/
+|   |-- main.py
+|   |-- database.py
+|   |-- crud.py
+|   |-- requirements.txt
+|   |-- models/
+|   `-- app/api/v1/
+|-- frontend/
+|   |-- package.json
+|   |-- vite.config.js
+|   `-- src/
+`-- database/
+		|-- schema.sql
+		`-- indexes.sql
 ```
 
----
+## Prerequisites
 
-## PostgreSQL Schema (auto-created on startup)
+- Docker Desktop (Windows/macOS) or Docker Engine + Compose plugin (Linux)
+- Port availability:
+	- `3000` (frontend)
+	- `8000` (backend)
+	- `5432` (postgres)
 
-| Table           | Purpose                                              |
-|-----------------|------------------------------------------------------|
-| calculations    | Full inputs JSON + results JSON + key metrics        |
-| bom_items       | Every BOM line item per calculation                  |
-| cashflow_years  | Year-by-year degradation-adjusted cash flow          |
-| suppliers       | Supplier database with weighted scores               |
-| audit_log       | Full audit trail: every CREATE / CALCULATE action    |
+## Quick Start (Docker, Recommended)
 
----
+1. Open a terminal and move to the app folder:
 
-## Quick Start (Docker — Recommended)
+```powershell
+cd D:\gowdas-lab\ROI-Tool\bess_app
+```
 
-```bash
-# 1. Clone / unzip project
-cd bess_app
+2. Create your env file (first time only):
 
-# 2. Start all services
+```powershell
+copy .env.example .env
+```
+
+3. Start everything:
+
+```powershell
 docker compose up --build
-
-# 3. Open browser
-# Frontend → http://localhost:3000
-# API docs → http://localhost:8000/docs
-# PostgreSQL → localhost:5432 (user: bess_user, pass: bess_pass, db: bess_db)
 ```
 
----
+4. Open:
 
-## Manual Start (Dev Mode)
+- Frontend: http://localhost:3000
+- Backend docs: http://localhost:8000/docs
+- Health check: http://localhost:8000/health
 
-### Backend
+5. Stop services:
 
-```bash
-cd backend
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Set DB URL (or use .env)
-export DATABASE_URL=postgresql://bess_user:bess_pass@localhost:5432/bess_db
-
-# Start FastAPI
-uvicorn main:app --reload --port 8000
+```powershell
+docker compose down
 ```
 
-### Frontend
+To stop and remove DB volume data as well:
 
-```bash
-cd frontend
-
-npm install
-npm run dev
-# → http://localhost:3000
+```powershell
+docker compose down -v
 ```
 
----
+## Important: Run Compose From Correct Directory
 
-## REST API Endpoints
+Run `docker compose ...` from `bess_app/` (the folder containing `docker-compose.yml`).
 
-| Method | Endpoint                    | Description                              |
-|--------|-----------------------------|------------------------------------------|
-| POST   | /api/calculate              | Run full BESS optimisation, store to DB  |
-| GET    | /api/calculations           | List all past calculations               |
-| GET    | /api/calculations/{id}      | Get full inputs + results for one calc   |
-| GET    | /api/bom/{calc_id}          | Get BOM items for a calculation          |
-| GET    | /api/suppliers              | List all suppliers                       |
-| POST   | /api/suppliers              | Add a new supplier                       |
-| GET    | /api/audit                  | Full audit trail log                     |
-| GET    | /health                     | Health check                             |
+If you run it from the parent folder, you may see:
 
-Interactive docs: http://localhost:8000/docs
-
----
-
-## Frontend Tabs
-
-1. **Inputs** — All configurable parameters (load, battery, solar, savings, DG)
-2. **Sizing** — Module count, inverter count, CAPEX breakdown
-3. **Cost Analysis** — OPEX, LCOS calculation
-4. **ROI & Savings** — Payback, annual savings, year-by-year cashflow
-5. **Degradation** — SOH-adjusted cash flow chart + table
-6. **Sensitivity** — Payback matrix (BOM × Tariff) + LCOS matrix (DoD × Cycles)
-7. **BOM** — Full Bill of Materials with category filter
-8. **Comparison** — BESS vs Solar vs DG vs BESS+Solar LCOS comparison
-9. **History** — Load and compare past calculations from PostgreSQL
-
----
-
-## What Gets Stored in PostgreSQL
-
-Every time you click "Run Optimisation":
-- Complete input parameters (JSON)
-- Complete results (JSON) 
-- All BOM line items (separate rows)
-- Year-by-year cashflow (separate rows)
-- Audit log entry
-
----
+```text
+no configuration file provided: not found
+```
 
 ## Environment Variables
 
-| Variable     | Default                                           |
-|--------------|---------------------------------------------------|
-| DATABASE_URL | postgresql://bess_user:bess_pass@localhost/bess_db|
+Configured through `.env` (loaded by `docker-compose.yml`).
 
----
+| Variable | Default | Description |
+|---|---|---|
+| `ENVIRONMENT` | `production` | Runtime environment label |
+| `FRONTEND_PORT` | `3000` | Host port mapped to frontend |
+| `BACKEND_PORT` | `8000` | Host port mapped to backend |
+| `POSTGRES_PORT` | `5432` | Host port mapped to postgres |
+| `POSTGRES_USER` | `bess_user` | Postgres user |
+| `POSTGRES_PASSWORD` | `bess_pass` | Postgres password |
+| `POSTGRES_DB` | `bess_db` | Postgres database |
+| `DATABASE_URL` | `postgresql://bess_user:bess_pass@postgres:5432/bess_db` | Backend DB connection string |
+| `VITE_API_URL` | `http://localhost:8000` | Frontend API base URL |
+| `CORS_ORIGINS` | `http://localhost:3000` | Allowed origins (comma-separated) |
+| `CORS_ALLOW_CREDENTIALS` | `false` | CORS credentials flag |
 
-Elektron RE · Mysuru, Karnataka · 2026
+## Data Storage (PostgreSQL)
+
+The backend creates tables on startup via SQLAlchemy (`Base.metadata.create_all`).
+
+Current schema includes 14 tables:
+
+- `projects`
+- `configurations`
+- `bom_line_items`
+- `component_catalog`
+- `suppliers`
+- `supplier_components`
+- `supplier_scores`
+- `scoring_weights`
+- `financial_results`
+- `cashflow_years`
+- `audit_log`
+- `calculations` (legacy)
+- `bom_items` (legacy)
+- `cashflow_years_legacy` (legacy)
+
+Note: the legacy tables are retained for backward compatibility.
+
+### Supplier Rankings Persistence
+
+- Supplier ranking values are stored in Postgres (`suppliers.weighted_score` and historical rows in `supplier_scores`).
+- Supplier list/rankings are fetched from Postgres APIs (`/api/suppliers`).
+- `seed_data/suppliers.json` is not used as a runtime data source by backend APIs.
+
+## API Summary
+
+Common endpoints:
+
+- `GET /health`
+- `POST /api/calculate`
+- `GET /api/calculations`
+- `GET /api/calculations/{id}`
+- `GET /api/bom/{calc_id}`
+- `GET /api/suppliers`
+- `POST /api/suppliers`
+- `POST /api/suppliers/{supplier_id}/score`
+- `GET /api/scoring-weights`
+- `POST /api/scoring-weights`
+- `GET /api/projects`
+- `POST /api/projects`
+- `GET /api/projects/{project_id}/configurations`
+
+Interactive docs: http://localhost:8000/docs
+
+## Loading Initial Supplier Data (Optional)
+
+If rankings page is empty, your DB likely has no suppliers yet. You can add data via:
+
+- Admin APIs (`/api/admin/suppliers`, `/api/admin/suppliers/bulk-import`)
+- UI flows that create suppliers
+- Direct SQL insert scripts
+
+## Local Development Without Docker (Optional)
+
+Backend:
+
+```bash
+cd backend
+pip install -r requirements.txt
+set DATABASE_URL=postgresql://bess_user:bess_pass@localhost:5432/bess_db
+uvicorn main:app --reload --port 8000
+```
+
+Frontend:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+## Troubleshooting
+
+- Frontend cannot reach backend:
+	- Check `VITE_API_URL` in `.env`
+	- Ensure backend is healthy at `http://localhost:8000/health`
+- CORS errors in browser:
+	- Set `CORS_ORIGINS` correctly (exact frontend URL)
+- Empty supplier rankings:
+	- Confirm `GET /api/suppliers` returns rows
+	- If `[]`, import or create suppliers first
+
+## Useful Commands
+
+```powershell
+# Rebuild and run
+docker compose up --build
+
+# Show service status
+docker compose ps
+
+# Tail backend logs
+docker compose logs backend --tail 200
+
+# Verify suppliers API quickly
+docker compose exec -T backend python -c "import urllib.request; u=urllib.request.urlopen('http://localhost:8000/api/suppliers'); print(u.status); print(u.read().decode()[:1000])"
+```

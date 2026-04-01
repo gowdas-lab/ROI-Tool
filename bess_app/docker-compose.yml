@@ -1,43 +1,58 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:15-alpine
+    restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: bess_user
-      POSTGRES_PASSWORD: bess_pass
-      POSTGRES_DB: bess_db
+      POSTGRES_USER: ${POSTGRES_USER:-bess_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bess_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-bess_db}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bess_user -d bess_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bess_user} -d ${POSTGRES_DB:-bess_db}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   backend:
     build: ./backend
+    restart: unless-stopped
+    env_file:
+      - .env
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     environment:
-      DATABASE_URL: postgresql://bess_user:bess_pass@postgres:5432/bess_db
+      DATABASE_URL: ${DATABASE_URL:-postgresql://bess_user:bess_pass@postgres:5432/bess_db}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      CORS_ALLOW_CREDENTIALS: ${CORS_ALLOW_CREDENTIALS:-false}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - ./backend:/app
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   frontend:
     build: ./frontend
+    restart: unless-stopped
+    env_file:
+      - .env
     ports:
-      - "3000:3000"
+      - "${FRONTEND_PORT:-3000}:3000"
     depends_on:
       - backend
     environment:
-      VITE_API_BASE: http://localhost:8000
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
 
 volumes:
   pgdata:

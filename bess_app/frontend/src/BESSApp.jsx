@@ -565,15 +565,12 @@ function SupplierEngineTab() {
       .then(d => setWeights(d.weights));
   }, []);
 
-  const handleScoreSubmit = async (supplierId, scores) => {
-    await fetch(`${API_BASE}/api/suppliers/${supplierId}/score`, {
+  const handleSaveWeights = async () => {
+    await fetch(`${API_BASE}/api/scoring-weights`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...scores, weights })
+      body: JSON.stringify({ weights })
     });
-    // Refresh suppliers
-    const r = await fetch(`${API_BASE}/api/suppliers`);
-    setSuppliers(await r.json());
   };
 
   return (
@@ -601,7 +598,7 @@ function SupplierEngineTab() {
               <span className="input-unit">%</span>
             </div>
           ))}
-          <button className="calc-btn" onClick={() => handleScoreSubmit(0, {})} style={{marginTop: "1rem"}}>
+          <button className="calc-btn" onClick={handleSaveWeights} style={{marginTop: "1rem"}}>
             Save Weights
           </button>
         </div>

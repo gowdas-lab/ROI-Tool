@@ -2,30 +2,16 @@
 BESS Optimality API - FastAPI entry point
 Modular API routes with core calculation engines
 """
+import os
+import math
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List
 from database import get_db, engine, Base
 from sqlalchemy.orm import Session
-
-# Import models to create tables
-from models import (
-    Project, Configuration, BOMLineItem, Supplier,
-    SupplierComponent, SupplierScore, ScoringWeight,
-    ComponentCatalog, FinancialResult, CashflowYear, AuditLog,
-    # Legacy
-    Calculation, BOMItem, CashflowYearLegacy
-)
-
-# Import core engines
-from core import (
-    calculate_sizing, generate_configurations,
-    calculate_supplier_score, get_default_weights,
-    calculate_capex, calculate_opex, calculate_lcos,
-    calculate_savings, calculate_roi, generate_cashflow,
-    build_bom, get_bom_summary
-)
+import crud
+import models
 
 # Import API routes
 from app.api.v1 import router as api_router
@@ -40,10 +26,17 @@ app = FastAPI(
     description="Battery Energy Storage System optimization with permutation engine and supplier scoring"
 )
 
+cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000")
+cors_origins = [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
+if not cors_origins:
+    cors_origins = ["http://localhost:3000"]
+
+cors_allow_credentials = os.getenv("CORS_ALLOW_CREDENTIALS", "false").lower() == "true"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=cors_origins,
+    allow_credentials=cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -382,7 +375,8 @@ async def calculate(inp: BESSInputs, db: Session = Depends(get_db)):
     result = calculate_bess(inp)
     # Store in DB
     record = crud.create_calculation(db, inp.dict(), result)
-    return {"id": record.id, "timestamp": record.created_at.isoformat(), **result}
+    ts = getattr(record, "created_at", None) or getattr(record, "timestamp", None)
+    return {"id": record.id, "timestamp": ts.isoformat() if ts else None, **result}
 
 
 @app.get("/api/calculations")
@@ -391,10 +385,11 @@ async def list_calculations(limit: int = 20, db: Session = Depends(get_db)):
     return [
         {
             "id": r.id,
-            "timestamp": r.created_at.isoformat(),
-            "total_capex": r.total_capex,
-            "lcos": r.lcos,
-            "payback_yrs": r.payback_yrs,
+            "timestamp": ((getattr(r, "created_at", None) or getattr(r, "timestamp", None)).isoformat()
+                          if (getattr(r, "created_at", None) or getattr(r, "timestamp", None)) else None),
+            "total_capex": getattr(r, "total_capex", None),
+            "lcos": getattr(r, "lcos", None),
+            "payback_yrs": getattr(r, "payback_yrs", None),
             "use_case": r.use_case,
         }
         for r in records
@@ -406,11 +401,12 @@ async def get_calculation(calc_id: int, db: Session = Depends(get_db)):
     record = crud.get_calculation(db, calc_id)
     if not record:
         raise HTTPException(status_code=404, detail="Calculation not found")
+    ts = getattr(record, "created_at", None) or getattr(record, "timestamp", None)
     return {
         "id": record.id,
-        "timestamp": record.created_at.isoformat(),
-        "inputs": record.inputs_json,
-        "results": record.results_json,
+        "timestamp": ts.isoformat() if ts else None,
+        "inputs": getattr(record, "inputs_json", None) or getattr(record, "inputs", None),
+        "results": getattr(record, "results_json", None) or getattr(record, "results", None),
     }
 
 
@@ -686,16 +682,24 @@ async def list_component_catalog(db: Session = Depends(get_db)):
 async def set_scoring_weights(data: dict, db: Session = Depends(get_db)):
     """Set custom scoring weights"""
     category = data.get("component_category", "default")
-    
-    for criterion, weight in data.get("weights", {}).items():
-        sw = models.ScoringWeight(
-            component_category=category,
-            criterion=criterion,
-            weight_pct=weight,
-            is_default=False
-        )
+    weights = data.get("weights", {})
+
+    sw = db.query(models.ScoringWeight).filter(
+        models.ScoringWeight.user_id == category
+    ).first()
+
+    if sw is None:
+        sw = models.ScoringWeight(user_id=category)
         db.add(sw)
-    
+
+    # Map API payload keys to current model fields.
+    sw.price_weight = weights.get("price", sw.price_weight or 30)
+    sw.technical_weight = weights.get("technical", sw.technical_weight or 25)
+    sw.delivery_weight = weights.get("delivery", sw.delivery_weight or 15)
+    sw.warranty_weight = weights.get("warranty", sw.warranty_weight or 10)
+    sw.support_weight = weights.get("support", sw.support_weight or 10)
+    sw.cert_weight = weights.get("cert", sw.cert_weight or 10)
+
     db.commit()
     return {"category": category, "weights_set": True}
 
@@ -703,11 +707,11 @@ async def set_scoring_weights(data: dict, db: Session = Depends(get_db)):
 @app.get("/api/scoring-weights")
 async def get_scoring_weights(component_category: str = "default", db: Session = Depends(get_db)):
     """Get scoring weights for a category"""
-    weights = db.query(models.ScoringWeight).filter(
-        models.ScoringWeight.component_category == component_category
-    ).all()
-    
-    if not weights:
+    row = db.query(models.ScoringWeight).filter(
+        models.ScoringWeight.user_id == component_category
+    ).first()
+
+    if not row:
         # Return defaults
         return {
             "category": component_category,
@@ -723,7 +727,14 @@ async def get_scoring_weights(component_category: str = "default", db: Session =
     
     return {
         "category": component_category,
-        "weights": {w.criterion: w.weight_pct for w in weights}
+        "weights": {
+            "price": row.price_weight,
+            "technical": row.technical_weight,
+            "delivery": row.delivery_weight,
+            "warranty": row.warranty_weight,
+            "support": row.support_weight,
+            "cert": row.cert_weight,
+        }
     }
 
 

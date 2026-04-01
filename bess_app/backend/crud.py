@@ -68,7 +68,10 @@ def create_calculation(db: Session, inputs: dict, results: dict):
 
 
 def list_calculations(db: Session, limit: int = 20):
-    return db.query(models.Calculation).order_by(models.Calculation.created_at.desc()).limit(limit).all()
+    order_col = getattr(models.Calculation, "created_at", None)
+    if order_col is None:
+        order_col = getattr(models.Calculation, "timestamp", models.Calculation.id)
+    return db.query(models.Calculation).order_by(order_col.desc()).limit(limit).all()
 
 
 def get_calculation(db: Session, calc_id: int):
