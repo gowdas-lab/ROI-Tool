@@ -1,0 +1,96 @@
+{
+  "components": [
+    {
+      "category": "Battery",
+      "subcategory": "LFP",
+      "description": "52.25kWh LFP Battery Module",
+      "rated_voltage_v": 768,
+      "rated_current_a": 68,
+      "capacity_kwh": 52.25,
+      "dimensions_mm": "1100x800x2200",
+      "weight_kg": 550,
+      "ip_rating": "IP55",
+      "certifications": "IEC62619, UL9540A, UN38.3",
+      "warranty_years": 10,
+      "standard": "IEC62619"
+    },
+    {
+      "category": "Battery",
+      "subcategory": "LFP",
+      "description": "26.4kWh LFP Battery Module",
+      "rated_voltage_v": 384,
+      "rated_current_a": 69,
+      "capacity_kwh": 26.4,
+      "dimensions_mm": "600x800x2200",
+      "weight_kg": 280,
+      "ip_rating": "IP55",
+      "certifications": "IEC62619, UL1973, UN38.3",
+      "warranty_years": 10,
+      "standard": "IEC62619"
+    },
+    {
+      "category": "Inverter",
+      "subcategory": "PCS",
+      "description": "125kW Power Conversion System",
+      "rated_voltage_v": 415,
+      "rated_power_kw": 125,
+      "dimensions_mm": "800x600x2000",
+      "weight_kg": 450,
+      "ip_rating": "IP65",
+      "certifications": "IEC62109, EN50549, IEEE1547",
+      "warranty_years": 5,
+      "standard": "IEC62109"
+    },
+    {
+      "category": "Inverter",
+      "subcategory": "PCS",
+      "description": "250kW Power Conversion System",
+      "rated_voltage_v": 415,
+      "rated_power_kw": 250,
+      "dimensions_mm": "1200x800x2200",
+      "weight_kg": 750,
+      "ip_rating": "IP65",
+      "certifications": "IEC62109, EN50549, IEEE1547",
+      "warranty_years": 5,
+      "standard": "IEC62109"
+    },
+    {
+      "category": "BMS",
+      "subcategory": "Master",
+      "description": "Battery Management System Master",
+      "rated_voltage_v": 24,
+      "dimensions_mm": "400x300x150",
+      "weight_kg": 5,
+      "ip_rating": "IP20",
+      "certifications": "IEC61508, ISO26262",
+      "warranty_years": 3,
+      "standard": "IEC61508"
+    },
+    {
+      "category": "Switchgear",
+      "subcategory": "AC",
+      "description": "AC Switchgear Assembly",
+      "rated_voltage_v": 415,
+      "rated_current_a": 1600,
+      "dimensions_mm": "2200x800x600",
+      "weight_kg": 300,
+      "ip_rating": "IP42",
+      "certifications": "IEC61439, UL891",
+      "warranty_years": 2,
+      "standard": "IEC61439"
+    },
+    {
+      "category": "Switchgear",
+      "subcategory": "DC",
+      "description": "DC Switchgear Assembly",
+      "rated_voltage_v": 1000,
+      "rated_current_a": 2000,
+      "dimensions_mm": "2200x800x600",
+      "weight_kg": 320,
+      "ip_rating": "IP42",
+      "certifications": "IEC61439, UL891",
+      "warranty_years": 2,
+      "standard": "IEC61439"
+    }
+  ]
+}

@@ -1,0 +1,1038 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>BESS Admin Panel — Elektron RE</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;500;600;700;800&display=swap');
+
+:root {
+  --bg:       #0d0f12;
+  --surface:  #13161b;
+  --surface2: #1a1e26;
+  --border:   #232830;
+  --border2:  #2e3440;
+  --accent:   #00e5a0;
+  --accent2:  #0af;
+  --danger:   #ff5a5a;
+  --warn:     #f5a623;
+  --text:     #e8ecf0;
+  --muted:    #6b7585;
+  --mono:     'DM Mono', monospace;
+  --sans:     'Syne', sans-serif;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--sans)}
+
+/* LAYOUT */
+.shell{display:flex;height:100vh;overflow:hidden}
+.sidebar{width:220px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:0}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.topbar{height:56px;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 24px;gap:16px;flex-shrink:0;background:var(--surface)}
+.content{flex:1;overflow-y:auto;padding:28px 28px}
+
+/* SIDEBAR */
+.logo{padding:20px 20px 16px;border-bottom:1px solid var(--border)}
+.logo-mark{font-family:var(--sans);font-size:13px;font-weight:800;letter-spacing:.08em;color:var(--accent);text-transform:uppercase}
+.logo-sub{font-size:10px;color:var(--muted);font-family:var(--mono);margin-top:2px}
+.nav{padding:12px 10px;flex:1}
+.nav-section{font-size:9px;font-weight:700;letter-spacing:.12em;color:var(--muted);text-transform:uppercase;padding:12px 10px 6px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);transition:all .15s;border:none;background:none;width:100%;text-align:left}
+.nav-item:hover{background:var(--surface2);color:var(--text)}
+.nav-item.active{background:rgba(0,229,160,.1);color:var(--accent);border:1px solid rgba(0,229,160,.2)}
+.nav-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
+.nav-count{margin-left:auto;font-family:var(--mono);font-size:10px;background:var(--surface2);border:1px solid var(--border2);padding:1px 6px;border-radius:20px}
+.sidebar-footer{padding:14px 16px;border-top:1px solid var(--border);font-size:10px;font-family:var(--mono);color:var(--muted)}
+
+/* TOPBAR */
+.page-title{font-size:14px;font-weight:700;letter-spacing:.03em}
+.breadcrumb{font-size:11px;color:var(--muted);font-family:var(--mono)}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.btn{display:inline-flex;align-items:center;gap:7px;padding:7px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:none;font-family:var(--sans);letter-spacing:.02em;transition:all .15s}
+.btn-primary{background:var(--accent);color:#000}
+.btn-primary:hover{background:#00ccaa;transform:translateY(-1px)}
+.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--border2)}
+.btn-ghost:hover{background:var(--surface2);color:var(--text)}
+.btn-danger{background:rgba(255,90,90,.12);color:var(--danger);border:1px solid rgba(255,90,90,.25)}
+.btn-danger:hover{background:rgba(255,90,90,.2)}
+.btn-sm{padding:4px 10px;font-size:11px;border-radius:6px}
+
+/* STATS ROW */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px 20px;position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--accent),transparent)}
+.stat-label{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+.stat-value{font-size:26px;font-weight:800;letter-spacing:-.02em;font-family:var(--mono)}
+.stat-sub{font-size:10px;color:var(--muted);margin-top:4px;font-family:var(--mono)}
+.stat-card.blue::before{background:linear-gradient(90deg,var(--accent2),transparent)}
+.stat-card.warn::before{background:linear-gradient(90deg,var(--warn),transparent)}
+.stat-card.danger::before{background:linear-gradient(90deg,var(--danger),transparent)}
+
+/* TABS */
+.tab-bar{display:flex;gap:4px;margin-bottom:20px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:4px}
+.tab{padding:7px 16px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;border:none;background:none;color:var(--muted);transition:all .15s}
+.tab.active{background:var(--surface2);color:var(--text);border:1px solid var(--border2)}
+.tab:hover:not(.active){color:var(--text)}
+
+/* SEARCH + FILTER BAR */
+.toolbar{display:flex;align-items:center;gap:10px;margin-bottom:18px}
+.search-box{flex:1;position:relative}
+.search-box input{width:100%;background:var(--surface);border:1px solid var(--border2);border-radius:8px;padding:9px 12px 9px 36px;color:var(--text);font-size:13px;font-family:var(--sans);outline:none}
+.search-box input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,229,160,.08)}
+.search-box::before{content:'⌕';position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:16px;pointer-events:none}
+.filter-select{background:var(--surface);border:1px solid var(--border2);border-radius:8px;padding:9px 12px;color:var(--text);font-size:12px;font-family:var(--sans);outline:none;cursor:pointer}
+.filter-select:focus{border-color:var(--accent)}
+
+/* TABLE */
+.table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.table-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)}
+.table-title{font-size:12px;font-weight:700;letter-spacing:.04em}
+.table-meta{font-size:11px;color:var(--muted);font-family:var(--mono)}
+table{width:100%;border-collapse:collapse}
+thead th{padding:10px 16px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border);background:var(--surface)}
+tbody tr{border-bottom:1px solid var(--border);transition:background .12s}
+tbody tr:hover{background:var(--surface2)}
+tbody tr:last-child{border-bottom:none}
+td{padding:12px 16px;font-size:12px;vertical-align:middle}
+.td-mono{font-family:var(--mono)}
+.td-muted{color:var(--muted);font-size:11px}
+.actions-cell{display:flex;gap:6px;align-items:center}
+
+/* BADGES */
+.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:.04em;font-family:var(--mono)}
+.badge-green{background:rgba(0,229,160,.12);color:var(--accent);border:1px solid rgba(0,229,160,.25)}
+.badge-blue{background:rgba(0,170,255,.12);color:var(--accent2);border:1px solid rgba(0,170,255,.25)}
+.badge-warn{background:rgba(245,166,35,.12);color:var(--warn);border:1px solid rgba(245,166,35,.25)}
+.badge-danger{background:rgba(255,90,90,.12);color:var(--danger);border:1px solid rgba(255,90,90,.25)}
+.badge-gray{background:var(--surface2);color:var(--muted);border:1px solid var(--border2)}
+
+/* MODAL */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.modal-overlay.open{display:flex}
+.modal{background:var(--surface);border:1px solid var(--border2);border-radius:16px;width:680px;max-height:85vh;overflow:hidden;display:flex;flex-direction:column;animation:modalIn .2s ease}
+@keyframes modalIn{from{opacity:0;transform:translateY(12px) scale(.98)}to{opacity:1;transform:none}}
+.modal-head{padding:20px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
+.modal-title{font-size:15px;font-weight:700}
+.modal-badge{font-size:10px;font-family:var(--mono);padding:2px 8px;border-radius:20px;background:rgba(0,229,160,.1);color:var(--accent);border:1px solid rgba(0,229,160,.2)}
+.modal-close{margin-left:auto;background:var(--surface2);border:1px solid var(--border2);border-radius:8px;padding:5px 10px;color:var(--muted);cursor:pointer;font-size:14px}
+.modal-close:hover{color:var(--text);border-color:var(--accent)}
+.modal-body{padding:24px;overflow-y:auto;flex:1}
+.modal-foot{padding:16px 24px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:flex-end;gap:10px}
+
+/* FORM */
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.form-grid.cols-1{grid-template-columns:1fr}
+.form-group{display:flex;flex-direction:column;gap:5px}
+.form-group.span-2{grid-column:span 2}
+label{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+input,select,textarea{background:var(--surface2);border:1px solid var(--border2);border-radius:8px;padding:9px 12px;color:var(--text);font-size:12px;font-family:var(--sans);outline:none;transition:border-color .15s}
+input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,229,160,.08)}
+textarea{resize:vertical;min-height:72px}
+.form-hint{font-size:10px;color:var(--muted);font-family:var(--mono)}
+.form-section{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);padding:14px 0 8px;border-top:1px solid var(--border);margin-top:4px}
+.form-section:first-child{border-top:none;padding-top:0}
+
+/* SCORE INPUTS */
+.score-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:4px}
+.score-item{background:var(--surface2);border:1px solid var(--border2);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:4px}
+.score-label{font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.score-input{background:none;border:none;font-size:18px;font-weight:800;color:var(--text);font-family:var(--mono);width:100%;padding:0;outline:none}
+
+/* TOAST */
+.toast-area{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:8px;z-index:2000}
+.toast{background:var(--surface);border:1px solid var(--border2);border-radius:10px;padding:12px 16px;font-size:12px;display:flex;align-items:center;gap:10px;animation:toastIn .25s ease;min-width:260px;box-shadow:0 8px 32px rgba(0,0,0,.4)}
+.toast.success{border-left:3px solid var(--accent)}
+.toast.error{border-left:3px solid var(--danger)}
+@keyframes toastIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:none}}
+.toast-icon{font-size:16px}
+
+/* CONFIRM DIALOG */
+.confirm-box{background:var(--surface);border:1px solid rgba(255,90,90,.3);border-radius:12px;padding:24px;width:380px;animation:modalIn .2s ease;text-align:center}
+.confirm-icon{font-size:36px;margin-bottom:12px}
+.confirm-title{font-size:15px;font-weight:700;margin-bottom:6px}
+.confirm-msg{font-size:12px;color:var(--muted);margin-bottom:20px;line-height:1.6}
+.confirm-btns{display:flex;gap:10px;justify-content:center}
+
+/* EMPTY STATE */
+.empty{text-align:center;padding:60px 20px;color:var(--muted)}
+.empty-icon{font-size:40px;margin-bottom:12px;opacity:.5}
+.empty-text{font-size:13px}
+
+/* CATEGORY COLOR STRIP */
+.cat-strip{display:inline-flex;align-items:center;gap:6px;font-size:11px}
+.cat-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0}
+
+/* SCORE BAR */
+.score-bar{display:flex;align-items:center;gap:8px}
+.score-bar-track{flex:1;height:4px;background:var(--border2);border-radius:2px;overflow:hidden}
+.score-bar-fill{height:100%;border-radius:2px;background:var(--accent);transition:width .3s}
+.score-num{font-family:var(--mono);font-size:11px;font-weight:700;min-width:24px;text-align:right}
+
+/* SCROLLBAR */
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+</style>
+</head>
+<body>
+<div class="shell">
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="logo">
+    <div class="logo-mark">Elektron RE</div>
+    <div class="logo-sub">BESS Admin Panel v1.0</div>
+  </div>
+  <nav class="nav">
+    <div class="nav-section">Database</div>
+    <button class="nav-item active" onclick="setTab('bom')">
+      <span class="nav-dot"></span>BOM Catalogue
+      <span class="nav-count" id="nav-bom-count">63</span>
+    </button>
+    <button class="nav-item" onclick="setTab('suppliers')">
+      <span class="nav-dot"></span>Suppliers
+      <span class="nav-count" id="nav-sup-count">0</span>
+    </button>
+    <button class="nav-item" onclick="setTab('supplier-components')">
+      <span class="nav-dot"></span>Supplier Components
+      <span class="nav-count" id="nav-sc-count">0</span>
+    </button>
+    <div class="nav-section">Config</div>
+    <button class="nav-item" onclick="setTab('weights')">
+      <span class="nav-dot"></span>Scoring Weights
+    </button>
+    <button class="nav-item" onclick="setTab('export')">
+      <span class="nav-dot"></span>Import / Export
+    </button>
+  </nav>
+  <div class="sidebar-footer">
+    DB: PostgreSQL 16<br>
+    API: localhost:8000
+  </div>
+</aside>
+
+<!-- MAIN -->
+<div class="main">
+  <div class="topbar">
+    <div>
+      <div class="page-title" id="topbar-title">BOM Catalogue</div>
+      <div class="breadcrumb" id="topbar-bread">Database → BOM Items</div>
+    </div>
+    <div class="topbar-right" id="topbar-actions">
+      <button class="btn btn-ghost" onclick="syncFromApi()">⟳ Sync API</button>
+      <button class="btn btn-primary" id="btn-add-main" onclick="openAddModal()">+ Add Item</button>
+    </div>
+  </div>
+
+  <div class="content" id="main-content">
+    <!-- Injected by JS -->
+  </div>
+</div>
+</div>
+
+<!-- MODAL -->
+<div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
+  <div class="modal" id="modal">
+    <div class="modal-head">
+      <div class="modal-title" id="modal-title">Add BOM Item</div>
+      <span class="modal-badge" id="modal-badge">NEW</span>
+      <button class="modal-close" onclick="closeModalDirect()">✕</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeModalDirect()">Cancel</button>
+      <button class="btn btn-primary" id="modal-save" onclick="saveModal()">Save to Database</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONFIRM DIALOG -->
+<div class="modal-overlay" id="confirm-overlay">
+  <div class="confirm-box">
+    <div class="confirm-icon">⚠</div>
+    <div class="confirm-title" id="confirm-title">Delete this item?</div>
+    <div class="confirm-msg" id="confirm-msg">This action cannot be undone. The record will be permanently removed from the database.</div>
+    <div class="confirm-btns">
+      <button class="btn btn-ghost" onclick="closeConfirm()">Cancel</button>
+      <button class="btn btn-danger" id="confirm-ok">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOASTS -->
+<div class="toast-area" id="toast-area"></div>
+
+<script>
+// ══════════════════════════════════════════
+// DATA STORE (mirrors your PostgreSQL tables)
+// ══════════════════════════════════════════
+const CAT_COLORS = {
+  "BATTERY SYSTEM":           "#3b82f6",
+  "AC SIDE":                  "#22c55e",
+  "POWER CONVERSION SYSTEM":  "#a855f7",
+  "DC SIDE":                  "#eab308",
+  "EMS":                      "#f97316",
+  "CONTROL WIRING":           "#94a3b8",
+  "GROUNDING":                "#14b8a6",
+  "AUXILIARY":                "#6366f1",
+  "ENCLOSURE":                "#ec4899",
+  "INSTALLATION":             "#64748b",
+  "TESTING":                  "#06b6d4",
+  "DOCUMENTATION":            "#f43f5e",
+};
+const CATS = Object.keys(CAT_COLORS);
+
+// BOM Catalogue (mirrors component_catalog table — Sheet 6)
+let BOM_ITEMS = [
+  {id:1,  bom_number:1,  category:"BATTERY SYSTEM",          description:"Battery Module/Pack — Complete",       qty_formula:"n",        unit:"system", spec:"51.2V, 1020Ah, 52.25kWh",    unit_price:520000, notes:"Cells, BMS, contactors, busbars, rack, wiring"},
+  {id:2,  bom_number:3,  category:"BATTERY SYSTEM",          description:"BMS with Communication",               qty_formula:"n",        unit:"system", spec:"CAN/RS485/Modbus",            unit_price:0,      notes:"Included in battery pack"},
+  {id:3,  bom_number:4,  category:"BATTERY SYSTEM",          description:"Battery Enclosure IP55",               qty_formula:"n",        unit:"pcs",    spec:"IP55 outdoor",                unit_price:0,      notes:"Included"},
+  {id:4,  bom_number:5,  category:"AC SIDE",                 description:"AC Main Circuit Breaker",              qty_formula:"inv",      unit:"pcs",    spec:"125A, 400–690VAC",            unit_price:4500,   notes:"Grid connection protection"},
+  {id:5,  bom_number:6,  category:"AC SIDE",                 description:"AC Disconnect Switch",                 qty_formula:"inv",      unit:"pcs",    spec:"125A, 400–690VAC",            unit_price:3500,   notes:"Manual isolation, lockable"},
+  {id:6,  bom_number:7,  category:"AC SIDE",                 description:"AC Surge Protection Device",           qty_formula:"inv",      unit:"pcs",    spec:"400VAC, 40kA",                unit_price:2500,   notes:"Lightning and surge protection"},
+  {id:7,  bom_number:8,  category:"AC SIDE",                 description:"AC Power Meter",                       qty_formula:"inv",      unit:"pcs",    spec:"0.5S class, Modbus",          unit_price:8000,   notes:"Grid import/export metering"},
+  {id:8,  bom_number:9,  category:"AC SIDE",                 description:"Current Transformers (CTs)",           qty_formula:"inv*3",    unit:"pcs",    spec:"125/5A or 150/5A",            unit_price:600,    notes:"One per phase per meter"},
+  {id:9,  bom_number:10, category:"AC SIDE",                 description:"AC Distribution Panel",                qty_formula:"1",        unit:"pcs",    spec:"125A main + branch",          unit_price:12000,  notes:"Distributes AC to inverter"},
+  {id:10, bom_number:11, category:"POWER CONVERSION SYSTEM", description:"Hybrid Inverter 50kW",                 qty_formula:"inv",      unit:"pcs",    spec:"50kW, 48–58V DC, 3-ph 400V", unit_price:180000, notes:"Qty = CEILING(peak_kw/50)"},
+  {id:11, bom_number:12, category:"POWER CONVERSION SYSTEM", description:"Inverter Communication Module",        qty_formula:"1",        unit:"pcs",    spec:"Modbus RTU/TCP, CAN",         unit_price:5000,   notes:"EMS integration"},
+  {id:12, bom_number:13, category:"DC SIDE",                 description:"DC Main Circuit Breaker",              qty_formula:"inv",      unit:"pcs",    spec:"800A, 80–100VDC",             unit_price:15000,  notes:"Main DC disconnect"},
+  {id:13, bom_number:14, category:"DC SIDE",                 description:"DC Fused Disconnect",                  qty_formula:"inv",      unit:"pcs",    spec:"630–800A, 80VDC",             unit_price:8000,   notes:"Alternative with fuse protection"},
+  {id:14, bom_number:15, category:"DC SIDE",                 description:"DC Power Cable — Main (+)",            qty_formula:"inv*19",   unit:"m",      spec:"240mm², 1000VDC, red",        unit_price:350,    notes:"Battery + to inverter +"},
+  {id:15, bom_number:16, category:"DC SIDE",                 description:"DC Power Cable — Main (−)",            qty_formula:"inv*19",   unit:"m",      spec:"240mm², 1000VDC, black",      unit_price:350,    notes:"Battery − to inverter −"},
+  {id:16, bom_number:17, category:"DC SIDE",                 description:"DC Cable Lugs",                        qty_formula:"inv*19",   unit:"pcs",    spec:"M12 stud, 1600A",             unit_price:80,     notes:"Cable terminations"},
+  {id:17, bom_number:18, category:"DC SIDE",                 description:"DC Surge Protection Device",           qty_formula:"1",        unit:"pcs",    spec:"80VDC, 20kA",                 unit_price:3000,   notes:"Protect inverter and battery"},
+  {id:18, bom_number:19, category:"DC SIDE",                 description:"DC Shunt (Optional)",                  qty_formula:"1",        unit:"pcs",    spec:"1500A, 75mV, 0.5%",          unit_price:2500,   notes:"Independent DC current monitoring"},
+  {id:19, bom_number:20, category:"EMS",                     description:"EMS Controller / Software",            qty_formula:"1",        unit:"system", spec:"Supports 50–500kWh",          unit_price:0,      notes:"Elektron indigenous EMS"},
+  {id:20, bom_number:21, category:"EMS",                     description:"EMS Gateway / Server",                 qty_formula:"1",        unit:"pcs",    spec:"Linux/Windows, Modbus master", unit_price:0,     notes:"Communicates with inverter, BMS"},
+  {id:21, bom_number:22, category:"EMS",                     description:"HMI Touchscreen Panel",                qty_formula:"1",        unit:"pcs",    spec:"10–12 inch, IP65",            unit_price:18000,  notes:"Local monitoring and control"},
+  {id:22, bom_number:23, category:"EMS",                     description:"Network Switch",                       qty_formula:"1",        unit:"pcs",    spec:"8-port managed",              unit_price:4000,   notes:"Network backbone"},
+  {id:23, bom_number:24, category:"EMS",                     description:"4G/LTE Router",                        qty_formula:"1",        unit:"pcs",    spec:"Dual SIM, VPN capable",       unit_price:8000,   notes:"Remote monitoring"},
+  {id:24, bom_number:25, category:"EMS",                     description:"Data Logger",                          qty_formula:"1",        unit:"pcs",    spec:"Modbus RTU/TCP, SD card",     unit_price:6000,   notes:"Backup data logging"},
+  {id:25, bom_number:26, category:"CONTROL WIRING",          description:"Modbus Cable RS485",                   qty_formula:"30",       unit:"m",      spec:"2×1.5mm² + shield, 120Ω",    unit_price:45,     notes:"EMS to Inverter to BMS"},
+  {id:26, bom_number:27, category:"CONTROL WIRING",          description:"CAN Bus Cable",                        qty_formula:"15",       unit:"m",      spec:"Twisted pair, 120Ω",          unit_price:60,     notes:"BMS comms"},
+  {id:27, bom_number:28, category:"CONTROL WIRING",          description:"Ethernet Cable CAT6",                  qty_formula:"30",       unit:"m",      spec:"Outdoor rated",               unit_price:35,     notes:"EMS to HMI to Router"},
+  {id:28, bom_number:29, category:"CONTROL WIRING",          description:"Control Power Cable",                  qty_formula:"20",       unit:"m",      spec:"4×1.5mm², 300/500V",         unit_price:50,     notes:"24VDC control circuits"},
+  {id:29, bom_number:30, category:"CONTROL WIRING",          description:"RS485 Terminators",                    qty_formula:"2",        unit:"pcs",    spec:"120Ω, 0.25W",                unit_price:30,     notes:"Modbus network termination"},
+  {id:30, bom_number:31, category:"CONTROL WIRING",          description:"RJ45 Connectors",                      qty_formula:"10",       unit:"pcs",    spec:"CAT6 shielded",               unit_price:25,     notes:"Network cable termination"},
+  {id:31, bom_number:32, category:"GROUNDING",               description:"Ground Rod",                           qty_formula:"2",        unit:"pcs",    spec:"5/8 inch × 8–10 ft",         unit_price:500,    notes:"System grounding electrodes"},
+  {id:32, bom_number:33, category:"GROUNDING",               description:"Ground Cable — Main",                  qty_formula:"20",       unit:"m",      spec:"35–70mm²",                   unit_price:120,    notes:"Main grounding conductor"},
+  {id:33, bom_number:34, category:"GROUNDING",               description:"Ground Busbar",                        qty_formula:"1",        unit:"pcs",    spec:"12-hole, 600mm",              unit_price:2000,   notes:"Central grounding point"},
+  {id:34, bom_number:35, category:"GROUNDING",               description:"Ground Lugs",                          qty_formula:"12",       unit:"pcs",    spec:"For 35–70mm² cable",          unit_price:60,     notes:"Grounding connections"},
+  {id:35, bom_number:36, category:"GROUNDING",               description:"Bonding Jumpers",                      qty_formula:"5",        unit:"pcs",    spec:"35mm², 300–500mm",            unit_price:150,    notes:"Equipment bonding"},
+  {id:36, bom_number:37, category:"GROUNDING",               description:"Lightning Arrester",                   qty_formula:"1",        unit:"system", spec:"Per local requirements",      unit_price:5000,   notes:"Outdoor/high-lightning areas"},
+  {id:37, bom_number:38, category:"AUXILIARY",               description:"Auxiliary Power Panel",                qty_formula:"1",        unit:"pcs",    spec:"63A, 230VAC, 6–8 circuits",  unit_price:7000,   notes:"Powers HVAC, lighting, controls"},
+  {id:38, bom_number:39, category:"AUXILIARY",               description:"UPS for Controls",                     qty_formula:"1",        unit:"pcs",    spec:"24VDC, 500VA, 2-hr",         unit_price:12000,  notes:"Backup power for EMS, BMS"},
+  {id:39, bom_number:40, category:"AUXILIARY",               description:"24VDC Power Supply",                   qty_formula:"1",        unit:"pcs",    spec:"10A, 240W",                   unit_price:3500,   notes:"Control system power"},
+  {id:40, bom_number:41, category:"AUXILIARY",               description:"Control Relays",                       qty_formula:"5",        unit:"pcs",    spec:"DPDT, 10A, 24VDC coil",      unit_price:200,    notes:"Interlock signals"},
+  {id:41, bom_number:42, category:"AUXILIARY",               description:"Emergency Stop Button",                qty_formula:"2",        unit:"pcs",    spec:"Twist-release, IP65",         unit_price:800,    notes:"Emergency shutdown"},
+  {id:42, bom_number:43, category:"AUXILIARY",               description:"Status Indicator Lights",              qty_formula:"5",        unit:"pcs",    spec:"Red/Yellow/Green, 24VDC",     unit_price:150,    notes:"System status indication"},
+  {id:43, bom_number:44, category:"ENCLOSURE",               description:"Control Cabinet",                      qty_formula:"1",        unit:"pcs",    spec:"800×600×300mm",               unit_price:18000,  notes:"EMS, switch, PSUs, breakers"},
+  {id:44, bom_number:45, category:"ENCLOSURE",               description:"DIN Rail",                             qty_formula:"3",        unit:"m",      spec:"Heavy duty",                  unit_price:200,    notes:"Mounting for breakers, PSUs"},
+  {id:45, bom_number:46, category:"ENCLOSURE",               description:"Cable Tray",                           qty_formula:"10",       unit:"m",      spec:"300mm width",                 unit_price:500,    notes:"Cable management"},
+  {id:46, bom_number:47, category:"ENCLOSURE",               description:"Cable Glands",                         qty_formula:"15",       unit:"pcs",    spec:"Various sizes, IP65",         unit_price:80,     notes:"Cable entry into enclosures"},
+  {id:47, bom_number:48, category:"ENCLOSURE",               description:"Weatherproof Junction Box",            qty_formula:"2",        unit:"pcs",    spec:"300×300×150mm, IP65",         unit_price:1200,   notes:"Cable splicing, outdoor"},
+  {id:48, bom_number:49, category:"INSTALLATION",            description:"Conduit — EMT/PVC",                    qty_formula:"20",       unit:"m",      spec:"25–50mm diameter",            unit_price:80,     notes:"Cable protection"},
+  {id:49, bom_number:50, category:"INSTALLATION",            description:"Conduit Fittings",                     qty_formula:"1",        unit:"set",    spec:"Complete fittings kit",       unit_price:2000,   notes:"Conduit installation"},
+  {id:50, bom_number:51, category:"INSTALLATION",            description:"Cable Ties — Heavy Duty",              qty_formula:"100",      unit:"pcs",    spec:"300–500mm length",            unit_price:8,      notes:"Cable bundling"},
+  {id:51, bom_number:52, category:"INSTALLATION",            description:"Warning Labels",                       qty_formula:"1",        unit:"set",    spec:"High voltage DC/AC warnings", unit_price:1500,   notes:"Safety signage"},
+  {id:52, bom_number:55, category:"TESTING",                 description:"Digital Multimeter",                   qty_formula:"1",        unit:"pcs",    spec:"CAT III 600V",                unit_price:3500,   notes:"Installation testing"},
+  {id:53, bom_number:56, category:"TESTING",                 description:"Clamp Meter",                          qty_formula:"1",        unit:"pcs",    spec:"1000A range",                 unit_price:5000,   notes:"Current measurement"},
+  {id:54, bom_number:57, category:"TESTING",                 description:"Insulation Tester",                    qty_formula:"1",        unit:"pcs",    spec:"500–1000VDC",                unit_price:8000,   notes:"Cable and insulation testing"},
+  {id:55, bom_number:58, category:"TESTING",                 description:"Commissioning Service",                qty_formula:"1",        unit:"service",spec:"2–3 days on-site",            unit_price:35000,  notes:"System integration, testing"},
+  {id:56, bom_number:59, category:"DOCUMENTATION",           description:"System Integration Drawings",          qty_formula:"1",        unit:"set",    spec:"Professional CAD",            unit_price:0,      notes:"Grid to breaker to BESS"},
+  {id:57, bom_number:60, category:"DOCUMENTATION",           description:"Equipment Submittals",                 qty_formula:"1",        unit:"set",    spec:"All major equipment",         unit_price:5000,   notes:"Inverter, BESS, EMS specs"},
+  {id:58, bom_number:61, category:"DOCUMENTATION",           description:"O&M Manual",                           qty_formula:"1",        unit:"set",    spec:"System-specific",             unit_price:0,      notes:"Operating procedures"},
+  {id:59, bom_number:62, category:"DOCUMENTATION",           description:"As-Built Documentation",               qty_formula:"1",        unit:"set",    spec:"Marked-up drawings",          unit_price:0,      notes:"Record of actual installation"},
+  {id:60, bom_number:63, category:"DOCUMENTATION",           description:"Operator Training",                    qty_formula:"1",        unit:"session",spec:"4–8 hours",                  unit_price:0,      notes:"EMS operation, monitoring"},
+];
+
+// Suppliers (mirrors suppliers table)
+let SUPPLIERS = [
+  {id:1, name:"Exide Industries Ltd",      country:"India",       website:"https://www.exideindustries.com/",        tier:"Indian OEM", certs:"BIS, IS cert"},
+  {id:2, name:"Amara Raja Energy",         country:"India",       website:"https://www.amararajabatteries.com/",     tier:"Indian OEM", certs:"BIS, IEC"},
+  {id:3, name:"Waaree Energies",           country:"India",       website:"https://www.waaree.com/energy-storage",   tier:"Indian OEM", certs:"BIS, IEC"},
+  {id:4, name:"Sungrow",                   country:"China/India", website:"https://www.sungrowpower.com/",           tier:"Tier-1",     certs:"IEC, CE, BIS"},
+  {id:5, name:"Schneider Electric India",  country:"India",       website:"https://www.se.com/in/en/",               tier:"Tier-1",     certs:"BIS, IEC, CE"},
+  {id:6, name:"ABB India",                 country:"India",       website:"https://new.abb.com/in",                  tier:"Tier-1",     certs:"BIS, IEC, CE"},
+  {id:7, name:"Havells India Ltd",         country:"India",       website:"https://www.havells.com/",                tier:"Indian OEM", certs:"BIS, IS 60947"},
+  {id:8, name:"L&T Electrical",           country:"India",       website:"https://www.eleczo.com/l-t-electrical/",  tier:"Indian OEM", certs:"BIS, IS 60947"},
+  {id:9, name:"Polycab India",             country:"India",       website:"https://www.polycab.com/",                tier:"Indian OEM", certs:"BIS, IS 694"},
+  {id:10,name:"Elektron RE",              country:"India",       website:"https://elektronre.com/",                  tier:"OEM/EMS",    certs:"BIS, MNRE"},
+];
+
+// Supplier Components (mirrors supplier_components table — Sheet 9)
+let SUP_COMPONENTS = [
+  {id:1, supplier_id:5, supplier_name:"Schneider Electric India", bom_number:5,  component:"AC Main Circuit Breaker",      model:"Acti9 iC60N",       unit_price:4500,  tech:9, delivery:8, warranty:9, support:8, cert:9},
+  {id:2, supplier_id:6, supplier_name:"ABB India",                bom_number:5,  component:"AC Main Circuit Breaker",      model:"S200 Series",       unit_price:4500,  tech:9, delivery:9, warranty:9, support:9, cert:9},
+  {id:3, supplier_id:7, supplier_name:"Havells India Ltd",         bom_number:5,  component:"AC Main Circuit Breaker",      model:"MCB SPN 125A",      unit_price:4500,  tech:8, delivery:8, warranty:8, support:7, cert:8},
+  {id:4, supplier_id:4, supplier_name:"Sungrow",                  bom_number:11, component:"Hybrid Inverter 50kW",         model:"SH50K-20",          unit_price:180000,tech:9, delivery:9, warranty:9, support:9, cert:9},
+  {id:5, supplier_id:6, supplier_name:"ABB India",                bom_number:13, component:"DC Main Circuit Breaker",      model:"SACE Tmax XT7",     unit_price:19500, tech:9, delivery:9, warranty:9, support:9, cert:9},
+  {id:6, supplier_id:9, supplier_name:"Polycab India",            bom_number:15, component:"DC Power Cable 240mm²",       model:"DC1000-240R/B",     unit_price:350,   tech:9, delivery:8, warranty:9, support:8, cert:9},
+  {id:7, supplier_id:10,supplier_name:"Elektron RE",              bom_number:20, component:"EMS Controller",               model:"ELK-EMS-CORE",       unit_price:0,     tech:9, delivery:9, warranty:9, support:10,cert:9},
+];
+
+// Scoring weights (mirrors scoring_weights table)
+let WEIGHTS = {price:25, technical:30, delivery:15, warranty:15, support:10, certification:5};
+
+// ID counters
+let nextBomId = 100, nextSupId = 20, nextScId = 20;
+let currentTab = 'bom';
+let editingId = null, modalType = null;
+let searchQ = '', filterCat = 'all', confirmCallback = null;
+
+// ══════════════════════════════════════════
+// TAB ROUTING
+// ══════════════════════════════════════════
+function setTab(tab) {
+  currentTab = tab; searchQ = ''; filterCat = 'all';
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+  updateNavCounts();
+  const titles = {
+    bom:'BOM Catalogue', suppliers:'Supplier Database', 'supplier-components':'Supplier Components',
+    weights:'Scoring Weights', export:'Import / Export'
+  };
+  const breads = {
+    bom:'Database → BOM Items', suppliers:'Database → Suppliers', 'supplier-components':'Database → Supplier Components',
+    weights:'Config → Scoring Weights', export:'Tools → Import / Export'
+  };
+  document.getElementById('topbar-title').textContent = titles[tab];
+  document.getElementById('topbar-bread').textContent = breads[tab];
+  document.getElementById('btn-add-main').textContent = tab==='weights'?'Reset to Defaults': tab==='export'?'Export JSON':'+  Add Item';
+  document.getElementById('btn-add-main').onclick = tab==='weights'?resetWeights: tab==='export'?exportAll: openAddModal;
+  renderContent();
+}
+
+function updateNavCounts() {
+  document.getElementById('nav-bom-count').textContent = BOM_ITEMS.length;
+  document.getElementById('nav-sup-count').textContent = SUPPLIERS.length;
+  document.getElementById('nav-sc-count').textContent = SUP_COMPONENTS.length;
+}
+
+// ══════════════════════════════════════════
+// RENDER CONTENT
+// ══════════════════════════════════════════
+function renderContent() {
+  const el = document.getElementById('main-content');
+  if (currentTab==='bom')                el.innerHTML = renderBomTab();
+  else if (currentTab==='suppliers')     el.innerHTML = renderSuppliersTab();
+  else if (currentTab==='supplier-components') el.innerHTML = renderScTab();
+  else if (currentTab==='weights')       el.innerHTML = renderWeightsTab();
+  else if (currentTab==='export')        el.innerHTML = renderExportTab();
+  attachTableEvents();
+}
+
+// ── STATS ──────────────────────────────────
+function statsHtml(cards) {
+  return `<div class="stats">${cards.map(c=>`
+    <div class="stat-card ${c.cls||''}">
+      <div class="stat-label">${c.label}</div>
+      <div class="stat-value" style="color:${c.color||'var(--accent)'}">${c.value}</div>
+      <div class="stat-sub">${c.sub||''}</div>
+    </div>`).join('')}</div>`;
+}
+
+// ══════════════════════════════════════════
+// BOM TAB
+// ══════════════════════════════════════════
+function renderBomTab() {
+  const totalCost = BOM_ITEMS.reduce((s,i)=>s+i.unit_price,0);
+  const cats = [...new Set(BOM_ITEMS.map(i=>i.category))];
+  let items = BOM_ITEMS.filter(i => {
+    const q = searchQ.toLowerCase();
+    const matchQ = !q || i.description.toLowerCase().includes(q) || i.category.toLowerCase().includes(q) || String(i.bom_number).includes(q);
+    const matchC = filterCat==='all' || i.category===filterCat;
+    return matchQ && matchC;
+  });
+
+  return statsHtml([
+    {label:'Total BOM Items',    value:BOM_ITEMS.length,                     sub:'All categories',        color:'var(--accent)'},
+    {label:'Total List Value',   value:'₹'+fmt(totalCost),                  sub:'Sum of unit prices',    color:'var(--accent2)', cls:'blue'},
+    {label:'Categories',         value:cats.length,                          sub:'Component groups',      color:'var(--warn)',    cls:'warn'},
+    {label:'Zero-Price Items',   value:BOM_ITEMS.filter(i=>i.unit_price===0).length, sub:'Included / TBD', color:'var(--muted)', cls:'danger'},
+  ])+`
+  <div class="toolbar">
+    <div class="search-box"><input placeholder="Search by description, category, BOM #…" oninput="searchBom(this.value)" value="${searchQ}"/></div>
+    <select class="filter-select" onchange="filterBomCat(this.value)">
+      <option value="all">All Categories</option>
+      ${CATS.map(c=>`<option value="${c}" ${filterCat===c?'selected':''}>${c}</option>`).join('')}
+    </select>
+    <button class="btn btn-ghost btn-sm" onclick="openBulkImport()">↑ Bulk Import</button>
+  </div>
+  <div class="table-wrap">
+    <div class="table-header">
+      <div class="table-title">BOM Catalogue</div>
+      <div class="table-meta">${items.length} of ${BOM_ITEMS.length} items</div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>#</th><th>Category</th><th>Description</th><th>Qty Formula</th><th>Unit</th><th>Specification</th><th>Unit Price (₹)</th><th>Actions</th>
+      </tr></thead>
+      <tbody>
+      ${items.length===0?`<tr><td colspan="8"><div class="empty"><div class="empty-icon">◈</div><div class="empty-text">No items match your search</div></div></td></tr>`:''}
+      ${items.map(i=>`
+        <tr>
+          <td class="td-mono">${i.bom_number}</td>
+          <td><div class="cat-strip"><div class="cat-dot" style="background:${CAT_COLORS[i.category]||'#666'}"></div>${i.category}</div></td>
+          <td><div style="font-weight:600;font-size:12px">${i.description}</div><div class="td-muted">${i.notes}</div></td>
+          <td><code style="background:var(--surface2);padding:2px 7px;border-radius:5px;font-size:11px;font-family:var(--mono)">${i.qty_formula}</code></td>
+          <td class="td-muted">${i.unit}</td>
+          <td class="td-muted" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${i.spec}">${i.spec}</td>
+          <td class="td-mono" style="font-weight:700;color:${i.unit_price===0?'var(--muted)':'var(--accent)'}">${i.unit_price===0?'Incl.':'₹'+fmt(i.unit_price)}</td>
+          <td><div class="actions-cell">
+            <button class="btn btn-ghost btn-sm" data-action="edit-bom" data-id="${i.id}">Edit</button>
+            <button class="btn btn-danger btn-sm" data-action="del-bom" data-id="${i.id}">Delete</button>
+          </div></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+// ══════════════════════════════════════════
+// SUPPLIERS TAB
+// ══════════════════════════════════════════
+function renderSuppliersTab() {
+  let items = SUPPLIERS.filter(s => {
+    const q = searchQ.toLowerCase();
+    return !q || s.name.toLowerCase().includes(q) || s.tier.toLowerCase().includes(q) || s.country.toLowerCase().includes(q);
+  });
+  const tiers = [...new Set(SUPPLIERS.map(s=>s.tier))];
+
+  return statsHtml([
+    {label:'Total Suppliers',  value:SUPPLIERS.length,                            sub:'In database',       color:'var(--accent)'},
+    {label:'Tier-1 Global',   value:SUPPLIERS.filter(s=>s.tier==='Tier-1').length,sub:'International OEM', color:'var(--accent2)',cls:'blue'},
+    {label:'Indian OEM',      value:SUPPLIERS.filter(s=>s.tier==='Indian OEM').length, sub:'Domestic brands', color:'var(--warn)',  cls:'warn'},
+    {label:'Tiers',           value:tiers.length,                                 sub:'Classification groups',color:'var(--muted)',cls:'danger'},
+  ])+`
+  <div class="toolbar">
+    <div class="search-box"><input placeholder="Search supplier name, tier, country…" oninput="searchSup(this.value)" value="${searchQ}"/></div>
+    <select class="filter-select" onchange="filterSupTier(this.value)">
+      <option value="all">All Tiers</option>
+      ${['Tier-1','Indian OEM','OEM/EMS'].map(t=>`<option value="${t}" ${filterCat===t?'selected':''}>${t}</option>`).join('')}
+    </select>
+  </div>
+  <div class="table-wrap">
+    <div class="table-header">
+      <div class="table-title">Supplier Database</div>
+      <div class="table-meta">${items.length} suppliers</div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>ID</th><th>Supplier Name</th><th>Country</th><th>Tier</th><th>Certifications</th><th>Website</th><th>Components</th><th>Actions</th>
+      </tr></thead>
+      <tbody>
+      ${items.map(s=>{
+        const compCount = SUP_COMPONENTS.filter(c=>c.supplier_id===s.id).length;
+        const tierColor = s.tier==='Tier-1'?'badge-blue':s.tier==='Indian OEM'?'badge-green':'badge-warn';
+        return `<tr>
+          <td class="td-mono">#${s.id}</td>
+          <td style="font-weight:600">${s.name}</td>
+          <td class="td-muted">${s.country}</td>
+          <td><span class="badge ${tierColor}">${s.tier}</span></td>
+          <td class="td-muted" style="font-size:11px">${s.certs}</td>
+          <td><a href="${s.website}" target="_blank" style="color:var(--accent2);font-size:11px;font-family:var(--mono);text-decoration:none">↗ Link</a></td>
+          <td><span class="badge ${compCount>0?'badge-green':'badge-gray'}">${compCount} items</span></td>
+          <td><div class="actions-cell">
+            <button class="btn btn-ghost btn-sm" data-action="edit-sup" data-id="${s.id}">Edit</button>
+            <button class="btn btn-danger btn-sm" data-action="del-sup" data-id="${s.id}">Delete</button>
+          </div></td>
+        </tr>`;
+      }).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+// ══════════════════════════════════════════
+// SUPPLIER COMPONENTS TAB
+// ══════════════════════════════════════════
+function renderScTab() {
+  let items = SUP_COMPONENTS.filter(c => {
+    const q = searchQ.toLowerCase();
+    return !q || c.supplier_name.toLowerCase().includes(q) || c.component.toLowerCase().includes(q) || c.model.toLowerCase().includes(q);
+  });
+
+  return statsHtml([
+    {label:'Component Entries',  value:SUP_COMPONENTS.length,                   sub:'Supplier × BOM links', color:'var(--accent)'},
+    {label:'BOM Items Covered',  value:[...new Set(SUP_COMPONENTS.map(c=>c.bom_number))].length, sub:'Unique BOM items', color:'var(--accent2)',cls:'blue'},
+    {label:'Avg Weighted Score', value:(SUP_COMPONENTS.reduce((s,c)=>s+computeScore(c),0)/Math.max(1,SUP_COMPONENTS.length)).toFixed(1), sub:'Out of 10', color:'var(--warn)',cls:'warn'},
+    {label:'Suppliers Active',   value:[...new Set(SUP_COMPONENTS.map(c=>c.supplier_id))].length,sub:'With components', color:'var(--muted)',cls:'danger'},
+  ])+`
+  <div class="toolbar">
+    <div class="search-box"><input placeholder="Search supplier name, component, model…" oninput="searchSc(this.value)" value="${searchQ}"/></div>
+  </div>
+  <div class="table-wrap">
+    <div class="table-header">
+      <div class="table-title">Supplier Components (Sheet 9 data)</div>
+      <div class="table-meta">${items.length} entries</div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>BOM#</th><th>Component</th><th>Supplier</th><th>Model</th><th>Unit ₹</th><th>Tech</th><th>Delivery</th><th>Warranty</th><th>Support</th><th>Cert</th><th>Weighted</th><th>Actions</th>
+      </tr></thead>
+      <tbody>
+      ${items.map(c=>{
+        const ws = computeScore(c);
+        const wsColor = ws>=8.5?'var(--accent)':ws>=7?'var(--warn)':'var(--danger)';
+        return `<tr>
+          <td class="td-mono">#${c.bom_number}</td>
+          <td style="font-size:11px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.component}</td>
+          <td style="font-weight:600;font-size:11px">${c.supplier_name}</td>
+          <td class="td-mono" style="font-size:10px">${c.model}</td>
+          <td class="td-mono" style="font-weight:700;color:var(--accent2)">₹${fmt(c.unit_price)}</td>
+          ${[c.tech,c.delivery,c.warranty,c.support,c.cert].map(v=>`<td><div class="score-bar"><div class="score-bar-track"><div class="score-bar-fill" style="width:${v*10}%"></div></div><span class="score-num">${v}</span></div></td>`).join('')}
+          <td><span style="font-family:var(--mono);font-size:13px;font-weight:800;color:${wsColor}">${ws}</span></td>
+          <td><div class="actions-cell">
+            <button class="btn btn-ghost btn-sm" data-action="edit-sc" data-id="${c.id}">Edit</button>
+            <button class="btn btn-danger btn-sm" data-action="del-sc" data-id="${c.id}">Delete</button>
+          </div></td>
+        </tr>`;
+      }).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function computeScore(c) {
+  const prices = SUP_COMPONENTS.filter(x=>x.bom_number===c.bom_number).map(x=>x.unit_price);
+  const mn = Math.min(...prices), mx = Math.max(...prices);
+  const ps = mx===mn ? 10 : 10*(1-(c.unit_price-mn)/(mx-mn));
+  const ws = (WEIGHTS.price/100)*ps + (WEIGHTS.technical/100)*c.tech + (WEIGHTS.delivery/100)*c.delivery + (WEIGHTS.warranty/100)*c.warranty + (WEIGHTS.support/100)*c.support + (WEIGHTS.certification/100)*c.cert;
+  return Math.round(ws*100)/100;
+}
+
+// ══════════════════════════════════════════
+// WEIGHTS TAB
+// ══════════════════════════════════════════
+function renderWeightsTab() {
+  const total = Object.values(WEIGHTS).reduce((a,b)=>a+b,0);
+  const valid = total===100;
+  const entries = [
+    {key:'price',        label:'Unit Price / Cost',         desc:'Lowest cost for equivalent spec. Most impactful for CAPEX.', color:var(--warn)},
+    {key:'technical',    label:'Technical Score',            desc:'Performance spec match, quality certifications (IEC, BIS, CE).', color:var(--accent)},
+    {key:'delivery',     label:'Delivery & Lead Time',       desc:'Stock availability, lead time, project schedule.', color:var(--accent2)},
+    {key:'warranty',     label:'Warranty & After-Sales',     desc:'Warranty duration, replacement SLA.', color:'#a855f7'},
+    {key:'support',      label:'Local Support & Service',    desc:'Pan-India service network, response time.', color:'#f97316'},
+    {key:'certification',label:'Certifications & Compliance',desc:'IEC, BIS, MNRE, IS standards. Grid code.', color:'#ec4899'},
+  ];
+
+  return `<div style="max-width:700px">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden">
+    <div style="padding:20px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+      <div><div style="font-size:14px;font-weight:700">Supplier Scoring Weights</div><div style="font-size:11px;color:var(--muted);margin-top:2px;font-family:var(--mono)">Sheet 8 — User-configurable · Total must = 100%</div></div>
+      <div style="font-size:22px;font-weight:800;font-family:var(--mono);color:${valid?'var(--accent)':'var(--danger)'}">${total}%</div>
+    </div>
+    <div style="padding:24px;display:flex;flex-direction:column;gap:16px">
+    ${entries.map(e=>`
+      <div style="display:flex;align-items:center;gap:16px">
+        <div style="flex:1">
+          <div style="font-size:12px;font-weight:700;margin-bottom:2px">${e.label}</div>
+          <div style="font-size:10px;color:var(--muted)">${e.desc}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;width:260px">
+          <input type="range" min="0" max="60" value="${WEIGHTS[e.key]}" 
+            style="flex:1;accent-color:${e.color}"
+            oninput="updateWeight('${e.key}',+this.value);this.nextElementSibling.textContent=this.value+'%'"/>
+          <span style="font-family:var(--mono);font-size:14px;font-weight:800;min-width:38px;text-align:right;color:${e.color}">${WEIGHTS[e.key]}%</span>
+        </div>
+      </div>`).join('')}
+    </div>
+    <div style="padding:16px 24px;border-top:1px solid var(--border);background:var(--surface2)">
+      <div style="font-size:11px;color:${valid?'var(--accent)':'var(--danger)'};font-family:var(--mono)">
+        ${valid?'✓ Weights are valid — total = 100%':'⚠ Total must equal 100% before saving. Current: '+total+'%'}
+      </div>
+    </div>
+  </div>
+  <div style="margin-top:16px">
+    <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">Rack-Count Tier Rules (Sheet 8)</div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden">
+      <table><thead><tr><th>Tier</th><th>Rack Count Range</th><th>Module Bundle</th></tr></thead>
+      <tbody>
+        <tr><td><span class="badge badge-gray">Tier 1</span></td><td>1–4 racks</td><td>4-Rack Config Bundle</td></tr>
+        <tr><td><span class="badge badge-blue">Tier 2</span></td><td>5–8 racks</td><td>8-Rack Config Bundle</td></tr>
+        <tr><td><span class="badge badge-green">Tier 3</span></td><td>9–12 racks</td><td>12-Rack Config Bundle</td></tr>
+        <tr><td><span class="badge badge-warn">Tier 4</span></td><td>&gt;12 racks</td><td>16+ Rack / Bulk Rate</td></tr>
+      </tbody></table>
+    </div>
+  </div></div>`;
+}
+
+function updateWeight(key, val) {
+  WEIGHTS[key] = val;
+  renderContent();
+  toast('Weight updated — remember to save','success');
+}
+function resetWeights() {
+  WEIGHTS = {price:25,technical:30,delivery:15,warranty:15,support:10,certification:5};
+  renderContent();
+  toast('Weights reset to Sheet 8 defaults','success');
+}
+
+// ══════════════════════════════════════════
+// EXPORT TAB
+// ══════════════════════════════════════════
+function renderExportTab() {
+  return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;max-width:860px">
+  ${[
+    {icon:'◈', title:'Export BOM Catalogue', desc:'Download all BOM items as JSON — paste into backend seed_data/component_catalog.json or POST to /api/v1/admin/bom/bulk', btn:'Export BOM JSON', action:'exportBom', color:'var(--accent)'},
+    {icon:'◉', title:'Export Supplier Database', desc:'Download all suppliers as JSON — paste into backend seed_data/suppliers.json or POST to /api/v1/admin/suppliers/bulk', btn:'Export Suppliers JSON', action:'exportSup', color:'var(--accent2)'},
+    {icon:'◎', title:'Export Supplier Components', desc:'Download all supplier-component mappings as JSON — this is the Sheet 9 data', btn:'Export Components JSON', action:'exportSc', color:'var(--warn)'},
+    {icon:'⊕', title:'Import from JSON', desc:'Paste JSON to bulk-import BOM items, suppliers, or supplier components into the database', btn:'Open Import Panel', action:'openBulkImport', color:'#a855f7'},
+  ].map(c=>`
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px">
+      <div style="font-size:28px;color:${c.color};margin-bottom:12px">${c.icon}</div>
+      <div style="font-size:14px;font-weight:700;margin-bottom:6px">${c.title}</div>
+      <div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:18px">${c.desc}</div>
+      <button class="btn btn-primary" style="background:${c.color}" onclick="${c.action}()">${c.btn}</button>
+    </div>`).join('')}
+  </div>
+  <div style="margin-top:20px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;max-width:860px">
+    <div style="font-size:12px;font-weight:700;margin-bottom:8px">Backend API Endpoints (for Windsurf)</div>
+    <div style="font-family:var(--mono);font-size:11px;color:var(--muted);line-height:2">
+      POST /api/v1/admin/bom/bulk         — import array of BOM items<br>
+      POST /api/v1/admin/suppliers/bulk   — import array of suppliers<br>
+      POST /api/v1/admin/components/bulk  — import supplier components<br>
+      GET  /api/v1/admin/bom              — get all BOM items<br>
+      PUT  /api/v1/admin/bom/{id}         — update single BOM item<br>
+      DELETE /api/v1/admin/bom/{id}       — delete BOM item
+    </div>
+  </div>`;
+}
+
+// ══════════════════════════════════════════
+// MODALS
+// ══════════════════════════════════════════
+function openAddModal() {
+  editingId = null;
+  if (currentTab==='bom') openBomModal(null);
+  else if (currentTab==='suppliers') openSupModal(null);
+  else if (currentTab==='supplier-components') openScModal(null);
+}
+
+function openBomModal(item) {
+  modalType = 'bom';
+  document.getElementById('modal-title').textContent = item ? 'Edit BOM Item' : 'Add BOM Item';
+  document.getElementById('modal-badge').textContent = item ? `BOM #${item.bom_number}` : 'NEW';
+  const maxBomNum = Math.max(...BOM_ITEMS.map(i=>i.bom_number), 0) + 1;
+  document.getElementById('modal-body').innerHTML = `
+    <div class="form-grid">
+      <div class="form-group">
+        <label>BOM Number</label>
+        <input type="number" id="f-bom-num" value="${item?.bom_number??maxBomNum}" min="1"/>
+        <div class="form-hint">Must be unique. Sheet 6 uses 1–63.</div>
+      </div>
+      <div class="form-group">
+        <label>Category</label>
+        <select id="f-bom-cat">
+          ${CATS.map(c=>`<option value="${c}" ${item?.category===c?'selected':''}>${c}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group span-2">
+        <label>Component Description</label>
+        <input type="text" id="f-bom-desc" value="${item?.description??''}" placeholder="e.g. DC Main Circuit Breaker"/>
+      </div>
+      <div class="form-group">
+        <label>Qty Formula</label>
+        <input type="text" id="f-bom-qty" value="${item?.qty_formula??'1'}" placeholder="e.g. inv, n, inv*19, 30"/>
+        <div class="form-hint">Variables: n=modules, inv=inverters, kw=peak_kw</div>
+      </div>
+      <div class="form-group">
+        <label>Unit</label>
+        <input type="text" id="f-bom-unit" value="${item?.unit??'pcs'}" placeholder="pcs, m, system, set…"/>
+      </div>
+      <div class="form-group span-2">
+        <label>Rating / Specification</label>
+        <input type="text" id="f-bom-spec" value="${item?.spec??''}" placeholder="e.g. 125A, 400–690VAC"/>
+      </div>
+      <div class="form-group">
+        <label>Unit Price (₹)</label>
+        <input type="number" id="f-bom-price" value="${item?.unit_price??0}" min="0"/>
+        <div class="form-hint">Enter 0 if included / TBD</div>
+      </div>
+      <div class="form-group">
+        <label>Notes</label>
+        <input type="text" id="f-bom-notes" value="${item?.notes??''}" placeholder="Brief note for team"/>
+      </div>
+    </div>`;
+  openModalEl();
+}
+
+function openSupModal(item) {
+  modalType = 'supplier';
+  document.getElementById('modal-title').textContent = item ? 'Edit Supplier' : 'Add Supplier';
+  document.getElementById('modal-badge').textContent = item ? `#${item.id}` : 'NEW';
+  document.getElementById('modal-body').innerHTML = `
+    <div class="form-grid">
+      <div class="form-group span-2">
+        <label>Supplier Name</label>
+        <input type="text" id="f-sup-name" value="${item?.name??''}" placeholder="e.g. Havells India Ltd"/>
+      </div>
+      <div class="form-group">
+        <label>Country</label>
+        <input type="text" id="f-sup-country" value="${item?.country??'India'}" placeholder="India"/>
+      </div>
+      <div class="form-group">
+        <label>Supplier Tier</label>
+        <select id="f-sup-tier">
+          ${['Tier-1','Indian OEM','OEM/EMS','Multi-supplier','Distributor'].map(t=>`<option ${item?.tier===t?'selected':''}>${t}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group span-2">
+        <label>Website URL</label>
+        <input type="text" id="f-sup-web" value="${item?.website??''}" placeholder="https://…"/>
+      </div>
+      <div class="form-group span-2">
+        <label>Certifications</label>
+        <input type="text" id="f-sup-certs" value="${item?.certs??''}" placeholder="BIS, IEC, CE, IS 60947…"/>
+        <div class="form-hint">Comma-separated list</div>
+      </div>
+    </div>`;
+  openModalEl();
+}
+
+function openScModal(item) {
+  modalType = 'sc';
+  document.getElementById('modal-title').textContent = item ? 'Edit Supplier Component' : 'Add Supplier Component';
+  document.getElementById('modal-badge').textContent = item ? `BOM #${item.bom_number}` : 'NEW';
+  const bomNums = [...new Set(BOM_ITEMS.map(b=>b.bom_number))].sort((a,b)=>a-b);
+  document.getElementById('modal-body').innerHTML = `
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Supplier</label>
+        <select id="f-sc-sup">
+          ${SUPPLIERS.map(s=>`<option value="${s.id}" ${item?.supplier_id===s.id?'selected':''}>${s.name}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>BOM Item</label>
+        <select id="f-sc-bom">
+          ${bomNums.map(n=>{const b=BOM_ITEMS.find(x=>x.bom_number===n);return`<option value="${n}" ${item?.bom_number===n?'selected':''}>#${n} – ${b?.description??''}</option>`}).join('')}
+        </select>
+      </div>
+      <div class="form-group span-2">
+        <label>Component Description</label>
+        <input type="text" id="f-sc-comp" value="${item?.component??''}" placeholder="e.g. DC Main Circuit Breaker 800A"/>
+      </div>
+      <div class="form-group">
+        <label>Model / Part Number</label>
+        <input type="text" id="f-sc-model" value="${item?.model??''}" placeholder="e.g. SACE Tmax XT7"/>
+      </div>
+      <div class="form-group">
+        <label>Unit Price (₹)</label>
+        <input type="number" id="f-sc-price" value="${item?.unit_price??0}" min="0"/>
+      </div>
+    </div>
+    <div class="form-section">Performance Scores (1–10) · Sheet 9</div>
+    <div class="score-grid">
+      ${[['tech','Technical'],['delivery','Delivery'],['warranty','Warranty'],['support','Support'],['cert','Certification']].map(([k,l])=>`
+        <div class="score-item">
+          <div class="score-label">${l}</div>
+          <input class="score-input" type="number" id="f-sc-${k}" value="${item?.[k]??8}" min="1" max="10"/>
+        </div>`).join('')}
+    </div>`;
+  openModalEl();
+}
+
+function openBulkImport() {
+  modalType = 'import';
+  document.getElementById('modal-title').textContent = 'Bulk Import (JSON)';
+  document.getElementById('modal-badge').textContent = 'IMPORT';
+  document.getElementById('modal-save').textContent = 'Import Data';
+  document.getElementById('modal-body').innerHTML = `
+    <div class="form-group cols-1">
+      <label>Import Type</label>
+      <select id="f-import-type">
+        <option value="bom">BOM Items (component_catalog)</option>
+        <option value="suppliers">Suppliers</option>
+        <option value="supplier-components">Supplier Components (Sheet 9)</option>
+      </select>
+    </div>
+    <div class="form-group" style="margin-top:14px">
+      <label>JSON Data</label>
+      <textarea id="f-import-json" style="min-height:200px;font-family:var(--mono);font-size:11px" placeholder='Paste JSON array here…\n[\n  {"bom_number": 64, "category": "BATTERY SYSTEM", "description": "New Component", ...}\n]'></textarea>
+      <div class="form-hint">Must be a JSON array. Fields must match the table schema.</div>
+    </div>`;
+  openModalEl();
+}
+
+function openModalEl() {
+  document.getElementById('modal-save').textContent = 'Save to Database';
+  document.getElementById('modal-overlay').classList.add('open');
+}
+function closeModalDirect() {
+  document.getElementById('modal-overlay').classList.remove('open');
+  editingId = null; modalType = null;
+}
+function closeModal(e) { if(e.target===document.getElementById('modal-overlay')) closeModalDirect(); }
+
+function saveModal() {
+  if (modalType==='bom')      saveBom();
+  else if (modalType==='supplier') saveSup();
+  else if (modalType==='sc')  saveSc();
+  else if (modalType==='import') doImport();
+}
+
+function saveBom() {
+  const bom_number = +document.getElementById('f-bom-num').value;
+  const category   = document.getElementById('f-bom-cat').value;
+  const description= document.getElementById('f-bom-desc').value.trim();
+  const qty_formula= document.getElementById('f-bom-qty').value.trim();
+  const unit       = document.getElementById('f-bom-unit').value.trim();
+  const spec       = document.getElementById('f-bom-spec').value.trim();
+  const unit_price = +document.getElementById('f-bom-price').value;
+  const notes      = document.getElementById('f-bom-notes').value.trim();
+  if (!description) { toast('Description is required','error'); return; }
+  if (editingId) {
+    const idx = BOM_ITEMS.findIndex(i=>i.id===editingId);
+    BOM_ITEMS[idx] = {...BOM_ITEMS[idx], bom_number, category, description, qty_formula, unit, spec, unit_price, notes};
+    toast(`BOM #${bom_number} updated successfully`,'success');
+  } else {
+    if (BOM_ITEMS.find(i=>i.bom_number===bom_number)) { toast('BOM number already exists','error'); return; }
+    BOM_ITEMS.push({id:nextBomId++, bom_number, category, description, qty_formula, unit, spec, unit_price, notes});
+    toast(`BOM #${bom_number} added to database`,'success');
+  }
+  closeModalDirect(); renderContent();
+}
+
+function saveSup() {
+  const name    = document.getElementById('f-sup-name').value.trim();
+  const country = document.getElementById('f-sup-country').value.trim();
+  const tier    = document.getElementById('f-sup-tier').value;
+  const website = document.getElementById('f-sup-web').value.trim();
+  const certs   = document.getElementById('f-sup-certs').value.trim();
+  if (!name) { toast('Supplier name is required','error'); return; }
+  if (editingId) {
+    const idx = SUPPLIERS.findIndex(s=>s.id===editingId);
+    SUPPLIERS[idx] = {...SUPPLIERS[idx], name, country, tier, website, certs};
+    toast(`${name} updated`,'success');
+  } else {
+    SUPPLIERS.push({id:nextSupId++, name, country, tier, website, certs});
+    toast(`${name} added to database`,'success');
+  }
+  closeModalDirect(); renderContent();
+}
+
+function saveSc() {
+  const supplier_id   = +document.getElementById('f-sc-sup').value;
+  const bom_number    = +document.getElementById('f-sc-bom').value;
+  const component     = document.getElementById('f-sc-comp').value.trim();
+  const model         = document.getElementById('f-sc-model').value.trim();
+  const unit_price    = +document.getElementById('f-sc-price').value;
+  const tech          = +document.getElementById('f-sc-tech').value;
+  const delivery      = +document.getElementById('f-sc-delivery').value;
+  const warranty      = +document.getElementById('f-sc-warranty').value;
+  const support       = +document.getElementById('f-sc-support').value;
+  const cert          = +document.getElementById('f-sc-cert').value;
+  const supplier_name = SUPPLIERS.find(s=>s.id===supplier_id)?.name ?? '';
+  if (!component) { toast('Component description required','error'); return; }
+  if (editingId) {
+    const idx = SUP_COMPONENTS.findIndex(c=>c.id===editingId);
+    SUP_COMPONENTS[idx] = {...SUP_COMPONENTS[idx], supplier_id, bom_number, component, model, unit_price, tech, delivery, warranty, support, cert, supplier_name};
+    toast('Component entry updated','success');
+  } else {
+    SUP_COMPONENTS.push({id:nextScId++, supplier_id, bom_number, component, model, unit_price, tech, delivery, warranty, support, cert, supplier_name});
+    toast('Component entry added','success');
+  }
+  closeModalDirect(); renderContent();
+}
+
+function doImport() {
+  const type = document.getElementById('f-import-type').value;
+  const raw  = document.getElementById('f-import-json').value.trim();
+  let data;
+  try { data = JSON.parse(raw); } catch(e) { toast('Invalid JSON — check syntax','error'); return; }
+  if (!Array.isArray(data)) { toast('Must be a JSON array [...]','error'); return; }
+  if (type==='bom') {
+    data.forEach(d => { if(d.bom_number && d.description) { BOM_ITEMS.push({id:nextBomId++,...d}); } });
+    toast(`${data.length} BOM items imported`,'success');
+  } else if (type==='suppliers') {
+    data.forEach(d => { if(d.name) { SUPPLIERS.push({id:nextSupId++,...d}); } });
+    toast(`${data.length} suppliers imported`,'success');
+  } else {
+    data.forEach(d => { if(d.supplier_id && d.bom_number) { SUP_COMPONENTS.push({id:nextScId++,...d}); } });
+    toast(`${data.length} components imported`,'success');
+  }
+  closeModalDirect(); renderContent();
+}
+
+// ══════════════════════════════════════════
+// TABLE EVENT DELEGATION
+// ══════════════════════════════════════════
+function attachTableEvents() {
+  document.querySelectorAll('[data-action]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      const action = btn.dataset.action;
+      const id = +btn.dataset.id;
+      if (action==='edit-bom')  { editingId=id; openBomModal(BOM_ITEMS.find(i=>i.id===id)); }
+      if (action==='del-bom')   { confirmDelete(()=>{ BOM_ITEMS=BOM_ITEMS.filter(i=>i.id!==id); renderContent(); toast('BOM item deleted','success'); },'Delete BOM Item?','This BOM component will be removed from the catalogue.'); }
+      if (action==='edit-sup')  { editingId=id; openSupModal(SUPPLIERS.find(s=>s.id===id)); }
+      if (action==='del-sup')   { confirmDelete(()=>{ SUPPLIERS=SUPPLIERS.filter(s=>s.id!==id); SUP_COMPONENTS=SUP_COMPONENTS.filter(c=>c.supplier_id!==id); renderContent(); toast('Supplier deleted','success'); },'Delete Supplier?','This supplier and all their component entries will be removed.'); }
+      if (action==='edit-sc')   { editingId=id; openScModal(SUP_COMPONENTS.find(c=>c.id===id)); }
+      if (action==='del-sc')    { confirmDelete(()=>{ SUP_COMPONENTS=SUP_COMPONENTS.filter(c=>c.id!==id); renderContent(); toast('Component entry deleted','success'); },'Delete Entry?','This supplier-component mapping will be removed.'); }
+    });
+  });
+}
+
+// ══════════════════════════════════════════
+// SEARCH / FILTER
+// ══════════════════════════════════════════
+function searchBom(q)  { searchQ=q; renderContent(); }
+function filterBomCat(c){ filterCat=c; renderContent(); }
+function searchSup(q)  { searchQ=q; renderContent(); }
+function filterSupTier(t){ filterCat=t; renderContent(); }
+function searchSc(q)   { searchQ=q; renderContent(); }
+
+// ══════════════════════════════════════════
+// EXPORT
+// ══════════════════════════════════════════
+function exportBom()  { downloadJson(BOM_ITEMS,'bom_catalogue.json'); }
+function exportSup()  { downloadJson(SUPPLIERS,'suppliers.json'); }
+function exportSc()   { downloadJson(SUP_COMPONENTS,'supplier_components.json'); }
+function exportAll()  { downloadJson({bom:BOM_ITEMS,suppliers:SUPPLIERS,components:SUP_COMPONENTS,weights:WEIGHTS},'bess_db_export.json'); toast('Full database exported','success'); }
+
+function downloadJson(data, filename) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+  a.download = filename; a.click();
+  toast(`${filename} downloaded`,'success');
+}
+
+function syncFromApi() {
+  toast('Connected to localhost:8000 — sync would pull live DB data','success');
+}
+
+// ══════════════════════════════════════════
+// CONFIRM + TOAST
+// ══════════════════════════════════════════
+function confirmDelete(cb, title='Delete?', msg='This cannot be undone.') {
+  confirmCallback = cb;
+  document.getElementById('confirm-title').textContent = title;
+  document.getElementById('confirm-msg').textContent = msg;
+  document.getElementById('confirm-ok').onclick = () => { cb(); closeConfirm(); };
+  document.getElementById('confirm-overlay').classList.add('open');
+}
+function closeConfirm() { document.getElementById('confirm-overlay').classList.remove('open'); }
+
+function toast(msg, type='success') {
+  const area = document.getElementById('toast-area');
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `<span class="toast-icon">${type==='success'?'✓':'✕'}</span>${msg}`;
+  area.appendChild(el);
+  setTimeout(()=>el.remove(), 3200);
+}
+
+// ══════════════════════════════════════════
+// HELPERS
+// ══════════════════════════════════════════
+function fmt(n) { return n.toLocaleString('en-IN'); }
+
+// INIT
+updateNavCounts();
+renderContent();
+</script>
+</body>
+</html>

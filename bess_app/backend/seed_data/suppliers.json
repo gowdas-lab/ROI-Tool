@@ -1,0 +1,74 @@
+{
+  "suppliers": [
+    {
+      "name": "CATL",
+      "component_category": "Battery",
+      "country": "China",
+      "tier": "Tier 1",
+      "certifications": ["ISO9001", "IATF16949", "IEC62619", "UL9540A"]
+    },
+    {
+      "name": "BYD",
+      "component_category": "Battery",
+      "country": "China",
+      "tier": "Tier 1",
+      "certifications": ["ISO9001", "IEC62619", "UL9540A", "UN38.3"]
+    },
+    {
+      "name": "Exide Industries",
+      "component_category": "Battery",
+      "country": "India",
+      "tier": "Tier 2",
+      "certifications": ["ISO9001", "ISO14001", "IEC60896"]
+    },
+    {
+      "name": "Delta Electronics",
+      "component_category": "Inverter",
+      "country": "Taiwan",
+      "tier": "Tier 1",
+      "certifications": ["ISO9001", "IEC62109", "EN50549", "IEEE1547"]
+    },
+    {
+      "name": "Sungrow",
+      "component_category": "Inverter",
+      "country": "China",
+      "tier": "Tier 1",
+      "certifications": ["ISO9001", "IEC62109", "CE", "VDE-AR-N4105"]
+    },
+    {
+      "name": "ABB",
+      "component_category": "Switchgear",
+      "country": "Switzerland",
+      "tier": "Tier 1",
+      "certifications": ["ISO9001", "IEC61439", "UL891", "CE"]
+    },
+    {
+      "name": "Schneider Electric",
+      "component_category": "Switchgear",
+      "country": "France",
+      "tier": "Tier 1",
+      "certifications": ["ISO9001", "IEC61439", "UL1558", "NEMA"]
+    },
+    {
+      "name": "Siemens",
+      "component_category": "Switchgear",
+      "country": "Germany",
+      "tier": "Tier 1",
+      "certifications": ["ISO9001", "IEC61439", "UL1558", "IEEE"]
+    },
+    {
+      "name": "Larsen & Toubro",
+      "component_category": "Installation",
+      "country": "India",
+      "tier": "Tier 1",
+      "certifications": ["ISO9001", "ISO14001", "OHSAS18001"]
+    },
+    {
+      "name": "Sterling & Wilson",
+      "component_category": "Installation",
+      "country": "India",
+      "tier": "Tier 1",
+      "certifications": ["ISO9001", "ISO14001", "OSHA"]
+    }
+  ]
+}

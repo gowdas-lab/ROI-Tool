@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bess-backend
+  labels:
+    app: bess-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bess-backend
+  template:
+    metadata:
+      labels:
+        app: bess-backend
+    spec:
+      containers:
+      - name: backend
+        image: bess-app/backend:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: db-secret
+              key: url
+        - name: REDIS_URL
+          value: "redis://redis:6379/0"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bess-backend
+spec:
+  selector:
+    app: bess-backend
+  ports:
+  - port: 8000
+    targetPort: 8000
+  type: ClusterIP
