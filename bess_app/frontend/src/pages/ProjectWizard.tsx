@@ -30,9 +30,37 @@ const defaultInputs = {
   dg_om_yr: '',
 };
 
+const numericDefaults: Record<string, number> = {
+  peak_demand_kw: 400,
+  daily_energy_kwh: 350,
+  num_sites: 1,
+  backup_duration_hrs: 2,
+  grid_peak_tariff: 12,
+  grid_offpeak_tariff: 6,
+  cycles_per_day: 2,
+  project_lifetime_yrs: 12,
+  dod_pct: 85,
+  battery_module_kwh: 52.25,
+  cycle_life: 6000,
+  calendar_life_yrs: 10,
+  round_trip_efficiency_pct: 90,
+  solar_pv_kwp: 0,
+  solar_cuf_pct: 19,
+  monthly_md_charge_saving: 0,
+  dg_displacement_saving_yr: 0,
+  dg_capacity_kw: 0,
+  dg_capex: 0,
+  dg_fuel_cost_yr: 0,
+  dg_om_yr: 0,
+};
+
 const API_BASE = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL || "http://localhost:8000";
 
-export function ProjectWizard() {
+type ProjectWizardProps = {
+  onOptimizationComplete?: (payload: { result: any; inputs: any; calcId: number; projectId: number | null }) => void;
+};
+
+export function ProjectWizard({ onOptimizationComplete }: ProjectWizardProps) {
   const { setProject } = useProjectStore();
   const [step, setStep] = useState(1);
   const [config, setConfig] = useState<SystemConfig>(null);
@@ -50,16 +78,20 @@ export function ProjectWizard() {
           acc[key] = (val as string).trim();
           return acc;
         }
-        acc[key] = val === '' ? 0 : parseFloat(val as string);
+        const parsed = val === '' ? Number.NaN : parseFloat(val as string);
+        acc[key] = Number.isFinite(parsed) ? parsed : (numericDefaults[key] ?? 0);
         return acc;
       }, {} as any);
 
-      const res = await fetch(`${API_BASE}/api/projects/`, {
+      if (!numericInputs.dod_pct || numericInputs.dod_pct <= 0) {
+        numericInputs.dod_pct = numericDefaults.dod_pct;
+      }
+
+      const res = await fetch(`${API_BASE}/api/calculate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...numericInputs,
-          name: `Project ${new Date().toISOString()}`,
           use_case: numericInputs.use_case || 'Sub-MW BESS',
         }),
       });
@@ -67,11 +99,46 @@ export function ProjectWizard() {
       if (!res.ok) throw new Error(`Calculation failed: ${res.status}`);
       
       const result = await res.json();
+      const calcId = result.id || Date.now();
+
+      let projectId: number | null = null;
+      try {
+        const projectRes = await fetch(`${API_BASE}/api/projects`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...numericInputs,
+            name: `Project ${new Date().toISOString()}`,
+            use_case: numericInputs.use_case || 'Sub-MW BESS',
+          }),
+        });
+
+        if (projectRes.ok) {
+          const project = await projectRes.json();
+          projectId = project.id || null;
+
+          if (projectId) {
+            await fetch(`${API_BASE}/api/projects/${projectId}/configurations`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+        }
+      } catch {
+        // Keep optimization result flow working even if project/config generation fails.
+      }
+
       setProject({
-        id: result.id || Date.now(),
-        name: `Project ${result.id || Date.now()}`,
+        id: projectId || calcId,
+        name: `Project ${projectId || calcId}`,
         created_at: new Date().toISOString(),
         inputs: { ...numericInputs, system_config: config },
+      });
+      onOptimizationComplete?.({
+        result,
+        inputs: { ...numericInputs, system_config: config },
+        calcId,
+        projectId,
       });
     } catch (e: any) {
       setError(e.message);

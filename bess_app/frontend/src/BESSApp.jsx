@@ -884,6 +884,7 @@ export default function BESSApp() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [calcId, setCalcId] = useState(null);
+  const [projectId, setProjectId] = useState(null);
 
   const handleCalculate = useCallback(async () => {
     setLoading(true);
@@ -956,8 +957,18 @@ export default function BESSApp() {
       {error && <div className="error-bar">⚠ {error} — Check API connection (FastAPI at port 8000)</div>}
 
       <main className="app-main">
-        {activeTab === "Project Wizard" && <ProjectWizard />}
-        {activeTab === "Configurations" && <ConfigurationsTab projectId={calcId} />}
+        {activeTab === "Project Wizard" && (
+          <ProjectWizard
+            onOptimizationComplete={({ result: calcResult, inputs: calcInputs, calcId: newCalcId, projectId: newProjectId }) => {
+              setResult({ ...calcResult, inputs: calcInputs });
+              setInputs(calcInputs);
+              setCalcId(newCalcId);
+              setProjectId(newProjectId);
+              setActiveTab("Configurations");
+            }}
+          />
+        )}
+        {activeTab === "Configurations" && <ConfigurationsTab projectId={projectId} />}
         {activeTab === "Supplier Engine" && <SupplierEngineTab />}
         {activeTab === "BOM Viewer" && <BOMTab data={result} />}
         {activeTab === "Analytics" && <AnalyticsTab data={result} />}

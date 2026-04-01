@@ -4,22 +4,10 @@ import datetime
 
 
 def create_calculation(db: Session, inputs: dict, results: dict):
-    roi = results.get("roi", {})
-    capex = results.get("capex", {})
-    lcos_data = results.get("lcos", {})
-    sizing = results.get("sizing", {})
-    savings = results.get("savings", {})
-
     record = models.Calculation(
         use_case=inputs.get("use_case", ""),
-        total_capex=capex.get("total_capex", 0),
-        lcos=lcos_data.get("lcos_inr_per_kwh", 0),
-        payback_yrs=roi.get("simple_payback_yrs", 0),
-        num_modules=sizing.get("num_modules", 0),
-        actual_kwh=sizing.get("actual_installed_kwh", 0),
-        total_annual_savings=savings.get("total_annual_savings", 0),
-        inputs_json=inputs,
-        results_json=results,
+        inputs=inputs,
+        results=results,
     )
     db.add(record)
     db.flush()
@@ -28,7 +16,6 @@ def create_calculation(db: Session, inputs: dict, results: dict):
     for item in results.get("bom_items", []):
         bom = models.BOMItem(
             calculation_id=record.id,
-            bom_item_id=item["id"],
             category=item["category"],
             description=item["description"],
             qty=item["qty"],
@@ -41,15 +28,14 @@ def create_calculation(db: Session, inputs: dict, results: dict):
 
     # Store cashflow
     for yr in results.get("cashflow_years", []):
-        cf = models.CashflowYear(
+        cf = models.CashflowYearLegacy(
             calculation_id=record.id,
             year=yr["year"],
             soh_pct=yr["soh_pct"],
-            usable_capacity_kwh=yr["usable_capacity_kwh"],
-            arbitrage_saving=yr["arbitrage_saving"],
-            md_dg_saving=yr["md_dg_saving"],
-            total_saving=yr["total_saving"],
-            net_benefit=yr["net_benefit"],
+            throughput_kwh=yr.get("throughput_kwh", 0),
+            opex=yr.get("opex", 0),
+            savings=yr.get("savings", 0),
+            net=yr.get("net", 0),
             cumulative_net=yr["cumulative_net"],
         )
         db.add(cf)
@@ -57,9 +43,12 @@ def create_calculation(db: Session, inputs: dict, results: dict):
     # Audit log
     log = models.AuditLog(
         action="CALCULATE",
-        table_name="calculations",
-        record_id=record.id,
-        details={"use_case": inputs.get("use_case"), "total_capex": capex.get("total_capex")},
+        entity_type="calculations",
+        entity_id=record.id,
+        changes={
+            "use_case": inputs.get("use_case"),
+            "total_capex": results.get("capex", {}).get("total_capex"),
+        },
     )
     db.add(log)
     db.commit()
