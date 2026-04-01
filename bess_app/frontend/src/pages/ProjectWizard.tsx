@@ -30,7 +30,7 @@ const defaultInputs = {
   dg_om_yr: '',
 };
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_BASE = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL || "http://localhost:8000";
 
 export function ProjectWizard() {
   const { setProject } = useProjectStore();
@@ -46,6 +46,10 @@ export function ProjectWizard() {
     try {
       // Convert string inputs to numbers for API
       const numericInputs = Object.entries(inputs).reduce((acc, [key, val]) => {
+        if (key === 'use_case') {
+          acc[key] = (val as string).trim();
+          return acc;
+        }
         acc[key] = val === '' ? 0 : parseFloat(val as string);
         return acc;
       }, {} as any);
@@ -66,7 +70,6 @@ export function ProjectWizard() {
       setProject({
         id: result.id || Date.now(),
         name: `Project ${result.id || Date.now()}`,
-        use_case: numericInputs.use_case || 'Sub-MW BESS',
         created_at: new Date().toISOString(),
         inputs: { ...numericInputs, system_config: config },
       });
