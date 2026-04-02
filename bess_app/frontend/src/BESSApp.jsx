@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import "./BESSApp.css";
 import { ProjectWizard } from "./pages";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = (import.meta.env.VITE_API_URL || "http://localhost:8000").replace(/\/$/, "");
 
 const fmt = (n, decimals = 0) =>
   n == null ? "—" : Number(n).toLocaleString("en-IN", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
@@ -10,7 +10,7 @@ const fmt = (n, decimals = 0) =>
 const fmtCur = (n) => n == null ? "—" : `₹${fmt(n)}`;
 const fmtLakh = (n) => n == null ? "—" : `₹${fmt(n / 100000, 2)}L`;
 
-const TABS = ["Project Wizard", "Configurations", "Supplier Engine", "BOM Viewer", "Analytics", "History"];
+const BASE_TABS = ["Project Wizard", "Configurations", "Supplier Engine", "BOM Viewer", "Analytics", "History"];
 
 const defaultInputs = {
   peak_demand_kw: 400,
@@ -493,21 +493,73 @@ function SensitivityTab({ data }) {
 }
 
 // ── Tab: Configurations (Permutation Results) ────────────────────────────────
-function ConfigurationsTab({ projectId }) {
+function ConfigurationsTab({ projectId, authHeaders, onProjectResolved, onUnauthorized }) {
   const [configs, setConfigs] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [resolvedProjectId, setResolvedProjectId] = useState(projectId || null);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!projectId) return;
-    setLoading(true);
-    fetch(`${API_BASE}/api/projects/${projectId}/configurations`)
-      .then(r => r.json())
-      .then(d => { setConfigs(d); setLoading(false); })
-      .catch(() => setLoading(false));
-  }, [projectId]);
+    let cancelled = false;
+
+    const loadConfigs = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        let targetProjectId = projectId;
+        if (!targetProjectId) {
+          const projectRes = await fetch(`${API_BASE}/api/projects?limit=1`, { headers: authHeaders() });
+          if (projectRes.status === 401) {
+            if (!cancelled) {
+              setError("Session expired. Please login again.");
+              onUnauthorized?.();
+            }
+            return;
+          }
+          if (!projectRes.ok) throw new Error("Could not resolve project");
+          const projects = await projectRes.json();
+          targetProjectId = projects?.[0]?.id;
+          if (targetProjectId) {
+            setResolvedProjectId(targetProjectId);
+            onProjectResolved?.(targetProjectId);
+          }
+        }
+
+        if (!targetProjectId) {
+          if (!cancelled) setConfigs([]);
+          return;
+        }
+
+        const res = await fetch(`${API_BASE}/api/projects/${targetProjectId}/configurations`, { headers: authHeaders() });
+        if (res.status === 401) {
+          if (!cancelled) {
+            setError("Session expired. Please login again.");
+            onUnauthorized?.();
+          }
+          return;
+        }
+        if (!res.ok) throw new Error("Failed to fetch configurations");
+        const data = await res.json();
+        if (!cancelled) setConfigs(data || []);
+      } catch (e) {
+        if (!cancelled) {
+          setConfigs([]);
+          setError(e.message || "Failed to load configurations");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    loadConfigs();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, authHeaders, onProjectResolved]);
 
   if (loading) return <div className="loading-msg">Loading configurations…</div>;
-  if (!projectId) return <EmptyState message="Create a project first to see configurations" />;
+  if (error) return <div className="error-bar">{error}</div>;
+  if (!resolvedProjectId && !projectId) return <EmptyState message="Create or load a project first to see configurations" />;
   if (configs.length === 0) return <div className="empty-msg">No configurations yet. Generate them from Project Wizard.</div>;
 
   return (
@@ -551,40 +603,84 @@ function ConfigurationsTab({ projectId }) {
 }
 
 // ── Tab: Supplier Engine (Selection + Scoring) ───────────────────────────────
-function SupplierEngineTab() {
+function SupplierEngineTab({ authHeaders, onUnauthorized }) {
   const [suppliers, setSuppliers] = useState([]);
   const [weights, setWeights] = useState({ price: 30, technical: 25, delivery: 15, warranty: 10, support: 10, cert: 10 });
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/suppliers`)
-      .then(r => r.json())
-      .then(d => setSuppliers(d));
-    fetch(`${API_BASE}/api/scoring-weights`)
-      .then(r => r.json())
-      .then(d => setWeights(d.weights));
-  }, []);
+    let cancelled = false;
+
+    const load = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const [suppliersRes, weightsRes] = await Promise.all([
+          fetch(`${API_BASE}/api/suppliers`, { headers: authHeaders() }),
+          fetch(`${API_BASE}/api/scoring-weights`, { headers: authHeaders() }),
+        ]);
+
+        if (suppliersRes.status === 401 || weightsRes.status === 401) {
+          if (!cancelled) {
+            setError("Session expired. Please login again.");
+            onUnauthorized?.();
+          }
+          return;
+        }
+
+        if (!suppliersRes.ok || !weightsRes.ok) {
+          throw new Error("Failed to load supplier engine data");
+        }
+
+        const suppliersData = await suppliersRes.json();
+        const weightsData = await weightsRes.json();
+
+        if (!cancelled) {
+          setSuppliers(Array.isArray(suppliersData) ? suppliersData : []);
+          setWeights((prev) => ({ ...prev, ...(weightsData?.weights || {}) }));
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(e.message || "Failed to load supplier engine");
+          setSuppliers([]);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [authHeaders, onUnauthorized]);
 
   const handleSaveWeights = async () => {
     await fetch(`${API_BASE}/api/scoring-weights`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
       body: JSON.stringify({ weights })
     });
   };
 
+  if (loading) {
+    return <div className="loading-msg">Loading supplier engine...</div>;
+  }
+
   return (
     <div className="tab-content">
+      {error && <div className="error-bar">{error}</div>}
       <div className="kpi-row">
         <KPICard label="Total Suppliers" value={suppliers.length} accent="blue" />
-        <KPICard label="Weight: Price" value={`${weights.price}%`} accent="green" />
-        <KPICard label="Weight: Technical" value={`${weights.technical}%`} accent="amber" />
+        <KPICard label="Weight: Price" value={`${weights?.price ?? 30}%`} accent="green" />
+        <KPICard label="Weight: Technical" value={`${weights?.technical ?? 25}%`} accent="amber" />
       </div>
 
       <div className="two-col">
         <div className="card">
           <div className="card-title">Scoring Weights (Configurable)</div>
-          {Object.entries(weights).map(([key, val]) => (
+          {Object.entries(weights || {}).map(([key, val]) => (
             <div key={key} className="input-row">
               <label className="input-label">{key.charAt(0).toUpperCase() + key.slice(1)}</label>
               <input
@@ -639,8 +735,83 @@ function AnalyticsTab({ data }) {
   const { sizing, capex, opex, lcos, savings, roi, cashflow_years, sensitivity } = data;
   const breakeven = cashflow_years?.find(y => y.cumulative_net >= 0);
 
+  const downloadBlob = (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadCSV = () => {
+    const rows = [
+      ["Metric", "Value"],
+      ["Total CAPEX", capex.total_capex],
+      ["LCOS", lcos.lcos_inr_per_kwh],
+      ["Payback Years", roi.simple_payback_yrs],
+      ["ROI 10Y %", roi.roi_10yr_pct],
+      ["Annual Savings", savings.total_annual_savings],
+      ["Net Annual Benefit", roi.net_annual_benefit],
+    ];
+    const csv = rows.map((r) => r.map((v) => `"${String(v ?? "").replaceAll("\"", "\"\"")}"`).join(",")).join("\n");
+    downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8;" }), "analytics-report.csv");
+  };
+
+  const downloadPDF = async () => {
+    const { jsPDF } = await import("jspdf");
+    const doc = new jsPDF();
+    let y = 16;
+    doc.setFontSize(16);
+    doc.text("BESS Analytics Report", 14, y);
+    y += 10;
+    doc.setFontSize(11);
+    [
+      `Total CAPEX: ${fmtCur(capex.total_capex)}`,
+      `LCOS: INR ${fmt(lcos.lcos_inr_per_kwh, 2)}/kWh`,
+      `Payback: ${roi.simple_payback_yrs} years`,
+      `10Y ROI: ${fmt(roi.roi_10yr_pct, 1)}%`,
+      `Annual Savings: ${fmtCur(savings.total_annual_savings)}`,
+      `Net Annual Benefit: ${fmtCur(roi.net_annual_benefit)}`,
+    ].forEach((line) => {
+      doc.text(line, 14, y);
+      y += 8;
+    });
+    doc.save("analytics-report.pdf");
+  };
+
+  const downloadDOCX = async () => {
+    const { Document, Packer, Paragraph, TextRun } = await import("docx");
+    const doc = new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph({ children: [new TextRun({ text: "BESS Analytics Report", bold: true, size: 30 })] }),
+            new Paragraph(`Total CAPEX: ${fmtCur(capex.total_capex)}`),
+            new Paragraph(`LCOS: INR ${fmt(lcos.lcos_inr_per_kwh, 2)}/kWh`),
+            new Paragraph(`Payback: ${roi.simple_payback_yrs} years`),
+            new Paragraph(`10Y ROI: ${fmt(roi.roi_10yr_pct, 1)}%`),
+            new Paragraph(`Annual Savings: ${fmtCur(savings.total_annual_savings)}`),
+            new Paragraph(`Net Annual Benefit: ${fmtCur(roi.net_annual_benefit)}`),
+          ],
+        },
+      ],
+    });
+    const blob = await Packer.toBlob(doc);
+    downloadBlob(blob, "analytics-report.docx");
+  };
+
   return (
     <div className="tab-content">
+      <div className="card" style={{ marginBottom: "1rem" }}>
+        <div className="card-title">Export Report</div>
+        <div className="calc-btn-row" style={{ justifyContent: "flex-start" }}>
+          <button className="load-btn" onClick={downloadPDF}>Download PDF</button>
+          <button className="load-btn" onClick={downloadDOCX}>Download DOCX</button>
+          <button className="load-btn" onClick={downloadCSV}>Download CSV</button>
+        </div>
+      </div>
+
       <div className="kpi-row">
         <KPICard label="Total CAPEX" value={fmtLakh(capex.total_capex)} accent="red" />
         <KPICard label="LCOS" value={`₹${fmt(lcos.lcos_inr_per_kwh, 2)}/kWh`} sub="Levelised Cost" accent="green" />
@@ -676,22 +847,161 @@ function AnalyticsTab({ data }) {
 }
 
 // ── Tab: BOM ─────────────────────────────────────────────────────────────────
-function BOMTab({ data }) {
-  if (!data) return <EmptyState />;
-  const { bom_items, bom_summary } = data;
+function BOMTab({ isAdmin, authHeaders }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const cats = [...new Set(bom_items?.map(i => i.category) || [])];
   const [filter, setFilter] = useState("All");
+  const [editingId, setEditingId] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [draft, setDraft] = useState({ category: "", description: "", qty: "", unit: "", spec: "", unit_price: "" });
 
-  const filtered = filter === "All" ? bom_items : bom_items?.filter(i => i.category === filter);
+  const loadItems = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/bom`, { headers: authHeaders() });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Failed to load BOM");
+      }
+      const data = await res.json();
+      setItems(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setError(e.message || "Failed to load BOM");
+    } finally {
+      setLoading(false);
+    }
+  }, [authHeaders]);
+
+  useEffect(() => { loadItems(); }, [loadItems]);
+
+  const resetDraft = () => {
+    setEditingId(null);
+    setDraft({ category: "", description: "", qty: "", unit: "", spec: "", unit_price: "" });
+    setShowForm(false);
+  };
+
+  const editItem = (item) => {
+    setEditingId(item.id);
+    setDraft({
+      category: item.category || "",
+      description: item.description || "",
+      qty: String(Number(item.qty_formula) || ""),
+      unit: item.unit || "",
+      spec: item.spec || "",
+      unit_price: String(item.unit_price ?? ""),
+    });
+    setShowForm(true);
+  };
+
+  const saveItem = async () => {
+    setError("");
+    const isEditing = editingId !== null;
+    const endpoint = isEditing ? `${API_BASE}/api/admin/bom/${editingId}` : `${API_BASE}/api/admin/bom`;
+    const method = isEditing ? "PUT" : "POST";
+
+    try {
+      const res = await fetch(endpoint, {
+        method,
+        headers: { ...authHeaders(), "X-User-Role": "admin", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          category: draft.category,
+          subcategory: "",
+          description: draft.description,
+          spec: draft.spec,
+          qty_formula: String(Number(draft.qty) || 1),
+          unit: draft.unit || "pcs",
+          unit_price: Number(draft.unit_price) || 0,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Failed to save BOM item");
+      }
+      resetDraft();
+      await loadItems();
+    } catch (e) {
+      setError(e.message || "Failed to save BOM item");
+    }
+  };
+
+  const deleteItem = async (id) => {
+    if (!window.confirm("Delete this BOM item?")) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/bom/${id}`, {
+        method: "DELETE",
+        headers: { ...authHeaders(), "X-User-Role": "admin" },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Failed to delete BOM item");
+      }
+      await loadItems();
+    } catch (e) {
+      setError(e.message || "Failed to delete BOM item");
+    }
+  };
+
+  // Map catalog rows to display rows
+  const viewerItems = items.map((item) => {
+    const qty = Number(item.qty_formula) || 1;
+    const unitPrice = Number(item.unit_price) || 0;
+    return {
+      id: item.id,
+      category: item.category,
+      description: item.description,
+      qty,
+      unit: item.unit || "pcs",
+      spec: item.spec || "",
+      unit_price: unitPrice,
+      line_total: qty * unitPrice,
+      _raw: item,
+    };
+  });
+
+  const cats = [...new Set(viewerItems.map(i => i.category).filter(Boolean))];
+  const filtered = filter === "All" ? viewerItems : viewerItems.filter(i => i.category === filter);
+  const totalBom = filtered.reduce((sum, i) => sum + (Number(i.line_total) || 0), 0);
+  const lineItems = filtered.length;
+  const batteryShare = totalBom > 0 ? ((filtered?.[0]?.line_total || 0) / totalBom) * 100 : 0;
 
   return (
     <div className="tab-content">
+      {loading && <div style={{ textAlign: "center", padding: "0.5rem", color: "#888" }}>Loading BOM…</div>}
       <div className="kpi-row">
-        <KPICard label="Total BOM Cost" value={fmtCur(bom_summary?.total_bom)} accent="red" />
-        <KPICard label="Line Items" value={bom_summary?.num_line_items} accent="blue" />
-        <KPICard label="Battery Share" value={`${fmt((bom_items?.[0]?.line_total / bom_summary?.total_bom) * 100, 1)}%`} sub="of total BOM" accent="amber" />
+        <KPICard label="Total BOM Cost" value={fmtCur(totalBom)} accent="red" />
+        <KPICard label="Line Items" value={lineItems} accent="blue" />
+        <KPICard label="Battery Share" value={`${fmt(batteryShare, 1)}%`} sub="of total BOM" accent="amber" />
       </div>
+
+      {isAdmin && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <div className="calc-btn-row" style={{ justifyContent: "flex-start" }}>
+            <button className="load-btn" onClick={() => setShowForm((v) => !v)}>
+              {showForm ? "Close Form" : "Add New BOM Item"}
+            </button>
+          </div>
+
+          {showForm && (
+            <div className="two-col">
+              <input className="inp" placeholder="Category (e.g., Battery System)" value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })} />
+              <input className="inp" placeholder="Description (e.g., Battery Module)" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
+              <input className="inp" type="number" placeholder="Qty (e.g., 2)" value={draft.qty} onChange={(e) => setDraft({ ...draft, qty: e.target.value })} />
+              <input className="inp" placeholder="Unit (e.g., pcs)" value={draft.unit} onChange={(e) => setDraft({ ...draft, unit: e.target.value })} />
+              <input className="inp" placeholder="Specification (e.g., 51.2V, 100Ah)" value={draft.spec} onChange={(e) => setDraft({ ...draft, spec: e.target.value })} />
+              <input className="inp" type="number" placeholder="Unit Price (e.g., 250000)" value={draft.unit_price} onChange={(e) => setDraft({ ...draft, unit_price: e.target.value })} />
+              <div className="calc-btn-row" style={{ justifyContent: "flex-start", gridColumn: "1 / -1" }}>
+                <button className="calc-btn" onClick={saveItem}>{editingId !== null ? "Update BOM Item" : "Save BOM Item"}</button>
+                {editingId !== null && <button className="btn-secondary" onClick={resetDraft}>Cancel Edit</button>}
+              </div>
+            </div>
+          )}
+          {error && <div className="error-bar">{error}</div>}
+        </div>
+      )}
+      {!isAdmin && error && <div className="error-bar">{error}</div>}
 
       <div className="bom-filter-row">
         {["All", ...cats].map(c => (
@@ -707,12 +1017,13 @@ function BOMTab({ data }) {
                 <th>#</th><th>Category</th><th>Description</th>
                 <th>Qty</th><th>Unit</th><th>Specification</th>
                 <th>Unit Price</th><th>Line Total</th>
+                {isAdmin ? <th>Actions</th> : null}
               </tr>
             </thead>
             <tbody>
-              {filtered?.map(item => (
+              {filtered.map((item, idx) => (
                 <tr key={item.id}>
-                  <td>{item.id}</td>
+                  <td>{idx + 1}</td>
                   <td><span className="cat-badge">{item.category}</span></td>
                   <td>{item.description}</td>
                   <td>{item.qty}</td>
@@ -720,13 +1031,20 @@ function BOMTab({ data }) {
                   <td className="spec-cell">{item.spec}</td>
                   <td>{fmtCur(item.unit_price)}</td>
                   <td className="total-cell">{fmtCur(item.line_total)}</td>
+                  {isAdmin ? (
+                    <td style={{ display: "flex", gap: "0.25rem" }}>
+                      <button className="edit-btn" onClick={() => editItem(item._raw)}>Edit</button>
+                      <button className="edit-btn" style={{ background: "#dc2626" }} onClick={() => deleteItem(item.id)}>Del</button>
+                    </td>
+                  ) : null}
                 </tr>
               ))}
             </tbody>
             <tfoot>
               <tr className="row-total">
                 <td colSpan={7}>TOTAL BOM EQUIPMENT COST</td>
-                <td>{fmtCur(bom_summary?.total_bom)}</td>
+                <td>{fmtCur(totalBom)}</td>
+                {isAdmin ? <td></td> : null}
               </tr>
             </tfoot>
           </table>
@@ -820,28 +1138,56 @@ function ComparisonTab({ data }) {
 }
 
 // ── Tab: History ─────────────────────────────────────────────────────────────
-function HistoryTab({ onLoad }) {
+function HistoryTab({ onLoad, onEdit, authHeaders, onUnauthorized }) {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    setLoading(true);
-    fetch(`${API_BASE}/api/calculations`)
-      .then(r => r.json())
-      .then(d => { setRecords(d); setLoading(false); })
-      .catch(() => setLoading(false));
-  }, []);
+    let cancelled = false;
+
+    const load = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const res = await fetch(`${API_BASE}/api/calculations`, { headers: authHeaders() });
+        if (res.status === 401) {
+          if (!cancelled) {
+            setError("Session expired. Please login again.");
+            onUnauthorized?.();
+          }
+          return;
+        }
+        if (!res.ok) throw new Error("Failed to load history");
+        const data = await res.json();
+        if (!cancelled) setRecords(Array.isArray(data) ? data : []);
+      } catch (e) {
+        if (!cancelled) {
+          setRecords([]);
+          setError(e.message || "Failed to load history");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [authHeaders, onUnauthorized]);
 
   return (
     <div className="tab-content">
       <div className="card">
         <div className="card-title">Calculation History</div>
+        {error ? <div className="error-bar">{error}</div> : null}
         {loading ? <div className="loading-msg">Loading…</div> :
           records.length === 0 ? <div className="empty-msg">No calculations yet. Run an optimisation first.</div> :
             <div className="table-scroll">
               <table className="data-table">
                 <thead>
-                  <tr><th>ID</th><th>Timestamp</th><th>Use Case</th><th>CAPEX</th><th>LCOS</th><th>Payback</th><th></th></tr>
+                  <tr><th>ID</th><th>Timestamp</th><th>Use Case</th><th>CAPEX</th><th>LCOS</th><th>Payback</th><th>Actions</th></tr>
                 </thead>
                 <tbody>
                   {records.map(r => (
@@ -854,6 +1200,7 @@ function HistoryTab({ onLoad }) {
                       <td>{r.payback_yrs} yrs</td>
                       <td>
                         <button className="load-btn" onClick={() => onLoad(r.id)}>Load</button>
+                        <button className="edit-btn" onClick={() => onEdit(r.id)}>Edit</button>
                       </td>
                     </tr>
                   ))}
@@ -861,6 +1208,209 @@ function HistoryTab({ onLoad }) {
               </table>
             </div>
         }
+      </div>
+    </div>
+  );
+}
+
+function AuthPage({ onAuthenticated, loginType = "user" }) {
+  const [mode, setMode] = useState("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const isAdminLogin = loginType === "admin";
+  const canSignup = !isAdminLogin;
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      const endpoint = mode === "login" || isAdminLogin ? "login" : "signup";
+      const body = { email, password };
+      const res = await fetch(`${API_BASE}/api/auth/${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Authentication failed");
+
+      if (isAdminLogin && data?.user?.role !== "admin") {
+        throw new Error("Admin account required for Admin Login");
+      }
+
+      onAuthenticated(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="auth-shell">
+      <form className="auth-card" onSubmit={submit}>
+        <h2>{isAdminLogin ? "Admin Login" : (mode === "login" ? "User Login" : "Create User Account")}</h2>
+        <p>{isAdminLogin ? "Login to access the BESS admin account management page." : "Access your account-specific Supplier Engine, Analytics, and History."}</p>
+
+        <label>Email</label>
+        <input className="inp" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+
+        <label>Password</label>
+        <input className="inp" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+
+        {error && <div className="error-bar">{error}</div>}
+
+        <button className="calc-btn" type="submit" disabled={loading}>
+          {loading ? "Please wait..." : mode === "login" ? "Login" : "Sign Up"}
+        </button>
+
+        {canSignup && (
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => setMode(mode === "login" ? "signup" : "login")}
+          >
+            {mode === "login" ? "Need an account? Sign up" : "Have an account? Login"}
+          </button>
+        )}
+      </form>
+    </div>
+  );
+}
+
+function BessAppAdminPage({ auth, authHeaders, onLogout }) {
+  const [admins, setAdmins] = useState([]);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const goHome = useCallback(() => {
+    if (typeof window !== "undefined") {
+      window.location.href = "/";
+    }
+  }, []);
+
+  const loadAdmins = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/bess-app-admin`, {
+        headers: {
+          ...authHeaders(),
+        },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Failed to load admin accounts");
+      setAdmins(data.admins || []);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [authHeaders]);
+
+  useEffect(() => {
+    loadAdmins();
+  }, [loadAdmins]);
+
+  const createAdmin = async (e) => {
+    e.preventDefault();
+    setError("");
+    const res = await fetch(`${API_BASE}/bess-app-admin`, {
+      method: "POST",
+      headers: {
+        ...authHeaders(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setError(data.detail || "Failed to create admin account");
+      return;
+    }
+    setEmail("");
+    setPassword("");
+    loadAdmins();
+  };
+
+  if (auth?.user?.role !== "admin") {
+    return (
+      <div className="auth-shell">
+        <div className="auth-card">
+          <h2>Access Denied</h2>
+          <p>Only admin users can access /bess-app-admin.</p>
+          <div className="calc-btn-row" style={{ justifyContent: "flex-start" }}>
+            <button className="btn-secondary" onClick={goHome}>Return to Home</button>
+          </div>
+          <button className="calc-btn" onClick={onLogout}>Logout</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="auth-shell">
+      <div className="auth-card" style={{ maxWidth: "900px" }}>
+        <h2>BESS App Admin</h2>
+        <p>Create and manage admin accounts from this dedicated endpoint UI.</p>
+
+        {auth?.user?.is_temporary_admin && (
+          <div className="temp-admin-banner">
+            You are logged in with the temporary admin account. Create a permanent admin account and use it for regular access.
+          </div>
+        )}
+
+        <form onSubmit={createAdmin}>
+          <label>New Admin Email</label>
+          <input className="inp" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+
+          <label>Temporary Password</label>
+          <input className="inp" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+
+          <div className="calc-btn-row" style={{ justifyContent: "flex-start" }}>
+            <button className="calc-btn" type="submit">Create Admin</button>
+          </div>
+        </form>
+
+        {error && (
+          <>
+            <div className="error-bar">{error}</div>
+            {(error.toLowerCase().includes("unauthorized") || error.toLowerCase().includes("access")) && (
+              <div className="calc-btn-row" style={{ justifyContent: "flex-start" }}>
+                <button className="btn-secondary" onClick={goHome}>Return to Home</button>
+                <button className="calc-btn" onClick={onLogout}>Logout</button>
+              </div>
+            )}
+          </>
+        )}
+
+        <div className="card" style={{ marginTop: "1rem" }}>
+          <div className="card-title">Existing Admin Accounts</div>
+          {loading ? <div className="loading-msg">Loading admin users...</div> : (
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr><th>ID</th><th>Email</th><th>Created At</th></tr>
+                </thead>
+                <tbody>
+                  {admins.map((a) => (
+                    <tr key={a.id}>
+                      <td>{a.id}</td>
+                      <td>{a.email}</td>
+                      <td>{a.created_at ? new Date(a.created_at).toLocaleString("en-IN") : "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -885,6 +1435,30 @@ export default function BESSApp() {
   const [error, setError] = useState(null);
   const [calcId, setCalcId] = useState(null);
   const [projectId, setProjectId] = useState(null);
+  const [editInputs, setEditInputs] = useState(null);
+  const [isEditingHistory, setIsEditingHistory] = useState(false);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const profileMenuRef = useRef(null);
+  const [auth, setAuth] = useState(() => {
+    try {
+      const raw = localStorage.getItem("bess-auth");
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const authHeaders = useCallback(() => {
+    if (!auth?.token) return {};
+    return { Authorization: `Bearer ${auth.token}` };
+  }, [auth]);
+
+  const tabs = BASE_TABS;
+
+  const handleUnauthorized = useCallback(() => {
+    setError("Session expired or unauthorized for that page.");
+    setActiveTab("Project Wizard");
+  }, []);
 
   const handleCalculate = useCallback(async () => {
     setLoading(true);
@@ -892,9 +1466,13 @@ export default function BESSApp() {
     try {
       const res = await fetch(`${API_BASE}/api/calculate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify(inputs),
       });
+      if (res.status === 401) {
+        handleUnauthorized();
+        return;
+      }
       if (!res.ok) throw new Error(`API error ${res.status}`);
       const data = await res.json();
       setResult({ ...data, inputs });
@@ -905,20 +1483,88 @@ export default function BESSApp() {
     } finally {
       setLoading(false);
     }
-  }, [inputs]);
+  }, [inputs, authHeaders, handleUnauthorized]);
 
   const handleLoadHistory = useCallback(async (id) => {
     try {
-      const res = await fetch(`${API_BASE}/api/calculations/${id}`);
+      const res = await fetch(`${API_BASE}/api/calculations/${id}`, { headers: authHeaders() });
+      if (res.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      if (!res.ok) throw new Error(`API error ${res.status}`);
       const data = await res.json();
       setResult({ ...data.results, inputs: data.inputs });
       setInputs(data.inputs);
       setCalcId(id);
-      setActiveTab("Sizing");
+      setActiveTab("Analytics");
     } catch (e) {
       setError(e.message);
     }
+  }, [authHeaders, handleUnauthorized]);
+
+  const handleEditHistory = useCallback(async (id) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/calculations/${id}`, { headers: authHeaders() });
+      if (res.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      if (!res.ok) throw new Error(`API error ${res.status}`);
+      const data = await res.json();
+      setEditInputs(data.inputs || null);
+      setIsEditingHistory(true);
+      setActiveTab("Project Wizard");
+    } catch (e) {
+      setError(e.message);
+    }
+  }, [authHeaders, handleUnauthorized]);
+
+  const handleAuthenticated = useCallback((data) => {
+    setError(null);
+    setResult(null);
+    setCalcId(null);
+    setProjectId(null);
+    setEditInputs(null);
+    setIsEditingHistory(false);
+    setActiveTab("Project Wizard");
+    setAuth(data);
+    localStorage.setItem("bess-auth", JSON.stringify(data));
+
+    // Hard refresh clears stale in-memory unauthorized UI state when switching accounts.
+    if (typeof window !== "undefined") {
+      window.location.reload();
+    }
   }, []);
+
+  const handleLogout = useCallback(() => {
+    setAuth(null);
+    localStorage.removeItem("bess-auth");
+  }, []);
+
+  const isBessAppAdminRoute = typeof window !== "undefined" && window.location.pathname === "/bess-app-admin";
+
+  useEffect(() => {
+    const handleOutsideClick = (event) => {
+      if (!isProfileOpen) return;
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target)) {
+        setIsProfileOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+    };
+  }, [isProfileOpen]);
+
+  if (!auth?.token) {
+    return <AuthPage onAuthenticated={handleAuthenticated} loginType={isBessAppAdminRoute ? "admin" : "user"} />;
+  }
+
+  if (isBessAppAdminRoute) {
+    return <BessAppAdminPage auth={auth} authHeaders={authHeaders} onLogout={handleLogout} />;
+  }
 
   return (
     <div className="bess-app">
@@ -931,6 +1577,18 @@ export default function BESSApp() {
           </div>
         </div>
         <div className="header-right">
+          <span className="role-badge">{auth.user?.role || "user"}</span>
+          <div className="profile-menu-wrap" ref={profileMenuRef}>
+            <button className="profile-icon-btn" onClick={() => setIsProfileOpen(v => !v)} aria-label="Open profile menu">
+              <span className="profile-icon">👤</span>
+            </button>
+            {isProfileOpen && (
+              <div className="profile-menu">
+                <div className="profile-email">{auth.user?.email}</div>
+                <button className="profile-logout-btn" onClick={handleLogout}>Logout</button>
+              </div>
+            )}
+          </div>
           {calcId && <span className="calc-badge">Calc #{calcId}</span>}
           {result && (
             <div className="header-kpis">
@@ -943,7 +1601,7 @@ export default function BESSApp() {
       </header>
 
       <nav className="tab-nav">
-        {TABS.map(t => (
+        {tabs.map(t => (
           <button
             key={t}
             className={`tab-btn ${activeTab === t ? "active" : ""}`}
@@ -954,25 +1612,39 @@ export default function BESSApp() {
         ))}
       </nav>
 
-      {error && <div className="error-bar">⚠ {error} — Check API connection (FastAPI at port 8000)</div>}
+      {error && (
+        <div className="error-bar" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem" }}>
+          <span>⚠ {error} — Check API connection (FastAPI at port 8000)</span>
+          <button className="btn-secondary" onClick={() => setActiveTab("Project Wizard")}>Return to Home</button>
+        </div>
+      )}
 
       <main className="app-main">
         {activeTab === "Project Wizard" && (
           <ProjectWizard
+            authToken={auth.token}
+            initialInputs={editInputs}
+            isEditMode={isEditingHistory}
+            onCancelEdit={() => {
+              setEditInputs(null);
+              setIsEditingHistory(false);
+            }}
             onOptimizationComplete={({ result: calcResult, inputs: calcInputs, calcId: newCalcId, projectId: newProjectId }) => {
               setResult({ ...calcResult, inputs: calcInputs });
               setInputs(calcInputs);
               setCalcId(newCalcId);
               setProjectId(newProjectId);
+              setIsEditingHistory(false);
+              setEditInputs(null);
               setActiveTab("Configurations");
             }}
           />
         )}
-        {activeTab === "Configurations" && <ConfigurationsTab projectId={projectId} />}
-        {activeTab === "Supplier Engine" && <SupplierEngineTab />}
-        {activeTab === "BOM Viewer" && <BOMTab data={result} />}
+        {activeTab === "Configurations" && <ConfigurationsTab projectId={projectId} authHeaders={authHeaders} onProjectResolved={setProjectId} onUnauthorized={handleUnauthorized} />}
+        {activeTab === "Supplier Engine" && <SupplierEngineTab authHeaders={authHeaders} onUnauthorized={handleUnauthorized} />}
+        {activeTab === "BOM Viewer" && <BOMTab isAdmin={auth.user?.role === "admin"} authHeaders={authHeaders} />}
         {activeTab === "Analytics" && <AnalyticsTab data={result} />}
-        {activeTab === "History" && <HistoryTab onLoad={handleLoadHistory} />}
+        {activeTab === "History" && <HistoryTab onLoad={handleLoadHistory} onEdit={handleEditHistory} authHeaders={authHeaders} onUnauthorized={handleUnauthorized} />}
       </main>
 
       <footer className="app-footer">

@@ -23,6 +23,7 @@ class Calculation(Base):
     __tablename__ = "calculations"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
     use_case = Column(String(100))
     inputs = Column(JSON)

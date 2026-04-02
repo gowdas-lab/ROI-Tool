@@ -4,12 +4,18 @@ Modular API routes with core calculation engines
 """
 import os
 import math
-from fastapi import FastAPI, HTTPException, Depends
+import hashlib
+import secrets
+import bcrypt
+import hmac
+import time
+from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
-from database import get_db, engine, Base
+from database import get_db, engine, Base, SessionLocal
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 import crud
 import models
 
@@ -18,6 +24,25 @@ from app.api.v1 import router as api_router
 
 # Create tables
 Base.metadata.create_all(bind=engine)
+
+
+def run_lightweight_migrations():
+    statements = [
+        "ALTER TABLE calculations ADD COLUMN IF NOT EXISTS user_id INTEGER",
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS user_id INTEGER",
+        "ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS user_id INTEGER",
+    ]
+    with engine.begin() as conn:
+        for stmt in statements:
+            conn.execute(text(stmt))
+
+
+run_lightweight_migrations()
+
+TEMP_ADMIN_EMAIL = "admin-bess-app@temp-mail.com"
+TEMP_ADMIN_PASSWORD = "12345admin"
+TOKEN_SECRET = os.getenv("AUTH_TOKEN_SECRET", "bess-dev-token-secret-change-me")
+TOKEN_TTL_SECONDS = int(os.getenv("AUTH_TOKEN_TTL_SECONDS", str(7 * 24 * 60 * 60)))
 
 # FastAPI app
 app = FastAPI(
@@ -43,6 +68,137 @@ app.add_middleware(
 
 # Include modular API routes
 app.include_router(api_router, prefix="/api")
+
+
+class SignUpPayload(BaseModel):
+    email: str
+    password: str
+
+
+class AdminSignUpPayload(BaseModel):
+    email: str
+    password: str
+
+
+class LoginPayload(BaseModel):
+    email: str
+    password: str
+
+
+def _hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def _is_bcrypt_hash(value: str) -> bool:
+    return value.startswith("$2a$") or value.startswith("$2b$") or value.startswith("$2y$")
+
+
+def _verify_password(plain_password: str, stored_hash: str) -> bool:
+    if not stored_hash:
+        return False
+
+    try:
+        if _is_bcrypt_hash(stored_hash):
+            return bcrypt.checkpw(plain_password.encode("utf-8"), stored_hash.encode("utf-8"))
+
+        # Legacy SHA256 support for existing users; upgraded to bcrypt on successful login.
+        return hashlib.sha256(plain_password.encode("utf-8")).hexdigest() == stored_hash
+    except Exception:
+        return False
+
+
+def _generate_access_token(user_id: int) -> str:
+    issued_at = str(int(time.time()))
+    nonce = secrets.token_hex(8)
+    payload = f"{user_id}:{issued_at}:{nonce}"
+    signature = hmac.new(TOKEN_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{payload}.{signature}"
+
+
+def _parse_access_token(token: str) -> int | None:
+    try:
+        payload, signature = token.rsplit(".", 1)
+        expected_sig = hmac.new(TOKEN_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected_sig):
+            return None
+
+        user_id_str, issued_at_str, _nonce = payload.split(":", 2)
+        issued_at = int(issued_at_str)
+        if int(time.time()) - issued_at > TOKEN_TTL_SECONDS:
+            return None
+
+        return int(user_id_str)
+    except Exception:
+        return None
+
+
+def _cleanup_temporary_admin_if_real_admin_exists(db: Session) -> None:
+    non_temp_admins = db.query(models.User).filter(
+        models.User.role == "admin",
+        models.User.email != TEMP_ADMIN_EMAIL,
+    ).count()
+
+    if non_temp_admins <= 0:
+        return
+
+    temp_admin = db.query(models.User).filter(models.User.email == TEMP_ADMIN_EMAIL).first()
+    if temp_admin:
+        db.delete(temp_admin)
+        db.commit()
+
+
+def ensure_temporary_admin() -> None:
+    db = SessionLocal()
+    try:
+        _cleanup_temporary_admin_if_real_admin_exists(db)
+
+        has_any_admin = db.query(models.User).filter(models.User.role == "admin").count() > 0
+        if has_any_admin:
+            return
+
+        temp_admin = db.query(models.User).filter(models.User.email == TEMP_ADMIN_EMAIL).first()
+        if temp_admin is None:
+            temp_admin = models.User(
+                email=TEMP_ADMIN_EMAIL,
+                password_hash=_hash_password(TEMP_ADMIN_PASSWORD),
+                role="admin",
+            )
+            db.add(temp_admin)
+            db.commit()
+            return
+
+        temp_admin.role = "admin"
+        temp_admin.password_hash = _hash_password(TEMP_ADMIN_PASSWORD)
+        db.commit()
+    finally:
+        db.close()
+
+
+ensure_temporary_admin()
+
+
+def get_current_user(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    db: Session = Depends(get_db),
+):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid auth token")
+
+    token = authorization.split(" ", 1)[1].strip()
+    user_id = _parse_access_token(token)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Session expired. Please login again")
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+def require_admin(current_user=Depends(get_current_user)):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return current_user
 
 # ─── Input Schemas ───────────────────────────────────────────────────────────
 
@@ -95,62 +251,229 @@ class BESSInputs(BaseModel):
     dg_om_yr: float = 150000.0
 
 
+@app.post("/api/auth/signup")
+async def signup(payload: SignUpPayload, db: Session = Depends(get_db)):
+    email = payload.email.strip().lower()
+    if not email or not payload.password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+
+    existing = db.query(models.User).filter(models.User.email == email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    user = models.User(email=email, password_hash=_hash_password(payload.password), role="user")
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = _generate_access_token(user.id)
+    return {
+        "token": token,
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "role": user.role,
+            "is_temporary_admin": False,
+        },
+    }
+
+
+@app.post("/api/auth/admin/signup")
+async def admin_signup(
+    payload: AdminSignUpPayload,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_admin),
+):
+    email = payload.email.strip().lower()
+    if not email or not payload.password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+
+    existing = db.query(models.User).filter(models.User.email == email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    user = models.User(email=email, password_hash=_hash_password(payload.password), role="admin")
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "id": user.id,
+        "email": user.email,
+        "role": user.role,
+        "created_by": current_user.email,
+    }
+
+
+@app.get("/bess-app-admin")
+async def get_admin_accounts(db: Session = Depends(get_db), current_user=Depends(require_admin)):
+    admins = db.query(models.User).filter(models.User.role == "admin").order_by(models.User.created_at.desc()).all()
+    return {
+        "created_by": current_user.email,
+        "admins": [
+            {
+                "id": a.id,
+                "email": a.email,
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+            }
+            for a in admins
+        ],
+    }
+
+
+@app.post("/bess-app-admin")
+async def create_admin_account(
+    payload: AdminSignUpPayload,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_admin),
+):
+    email = payload.email.strip().lower()
+    if not email or not payload.password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+
+    existing = db.query(models.User).filter(models.User.email == email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    admin_user = models.User(email=email, password_hash=_hash_password(payload.password), role="admin")
+    db.add(admin_user)
+    db.commit()
+    db.refresh(admin_user)
+
+    return {
+        "id": admin_user.id,
+        "email": admin_user.email,
+        "role": admin_user.role,
+        "created_by": current_user.email,
+    }
+
+
+@app.post("/api/auth/login")
+async def login(payload: LoginPayload, db: Session = Depends(get_db)):
+    email = payload.email.strip().lower()
+    user = db.query(models.User).filter(models.User.email == email).first()
+
+    if not user or not _verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    if not _is_bcrypt_hash(user.password_hash):
+        user.password_hash = _hash_password(payload.password)
+        db.commit()
+        db.refresh(user)
+
+    token = _generate_access_token(user.id)
+    return {
+        "token": token,
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "role": user.role,
+            "is_temporary_admin": user.email == TEMP_ADMIN_EMAIL,
+        },
+    }
+
+
 # ─── Core Calculation Engine ─────────────────────────────────────────────────
 
-def calculate_bess(inp: BESSInputs) -> dict:
+def _eval_qty(formula_str: str, sizing_vars: dict) -> float:
+    """Safely evaluate a qty_formula string using sizing variables.
+
+    Allowed tokens: digits, decimal point, +, -, *, /, (, ) and sizing variable names.
+    """
+    import re
+    s = str(formula_str).strip()
+    if not s:
+        return 1
+    # Try as plain number first (fast path)
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    # Substitute known variable names
+    allowed_names = set(sizing_vars.keys())
+    # Validate: only allow digits, operators, parens, spaces, and known names
+    token_pattern = re.compile(r"[a-zA-Z_]\w*|[\d.]+|[+\-*/()., ]")
+    tokens = token_pattern.findall(s)
+    reconstructed = "".join(tokens)
+    for tok in tokens:
+        if tok[0].isalpha() and tok not in allowed_names:
+            return 1  # unknown variable → default to 1
+    try:
+        return float(eval(reconstructed, {"__builtins__": {}}, sizing_vars))  # noqa: S307
+    except Exception:
+        return 1
+
+
+def calculate_bess(inp: BESSInputs, catalog_items=None) -> dict:
     # --- SIZING ---
     required_energy = inp.peak_demand_kw * inp.backup_duration_hrs
     installed_cap_required = required_energy / (inp.dod_pct / 100)
     num_modules = math.ceil(installed_cap_required / inp.battery_module_kwh)
     actual_installed_kwh = num_modules * inp.battery_module_kwh
 
-    # --- BOM COST (base equipment from data) ---
-    battery_unit_price = 520000
-    battery_total = num_modules * battery_unit_price
-
-    # AC Side
+    # --- SIZING VARIABLES (available to qty_formula evaluation) ---
     num_inverters = math.ceil(inp.peak_demand_kw / 50)
-    ac_mcb = num_inverters * 4500
-    ac_disconnect = num_inverters * 3500
-    ac_spd = num_inverters * 2500
-    ac_meter = num_inverters * 8000
-    ac_cts = num_inverters * 3 * 600
-    ac_panel = 12000
-    inverter_cost = num_inverters * 180000
-    inv_comm = 5000
-
-    # DC Side
-    dc_mcb = num_inverters * 15000
-    dc_fuse = num_inverters * 8000
     cable_length = num_inverters * 19
-    dc_cable_pos = cable_length * 350
-    dc_cable_neg = cable_length * 350
-    dc_lugs = cable_length * 80
-    dc_spd = 3000
-    dc_shunt = 2500
+    sizing_vars = {
+        "n": num_modules,
+        "num_modules": num_modules,
+        "inv": num_inverters,
+        "num_inverters": num_inverters,
+        "cable_length": cable_length,
+    }
 
-    # EMS
-    hmi = 18000
-    ems_controller = 0
-    ems_gateway = 0
+    # --- BOM COST (from admin catalog or hardcoded fallback) ---
+    if catalog_items and len(catalog_items) > 0:
+        bom_items = []
+        bom_equipment_total = 0
+        for item in catalog_items:
+            qty = _eval_qty(item.qty_formula or "1", sizing_vars)
+            unit_price = float(item.unit_price or 0)
+            line_total = qty * unit_price
+            bom_equipment_total += line_total
+            bom_items.append({
+                "id": item.id,
+                "category": item.category or "",
+                "description": item.description or "",
+                "qty": qty,
+                "unit": item.unit or "pcs",
+                "spec": item.spec or "",
+                "unit_price": unit_price,
+                "line_total": round(line_total, 2),
+            })
+    # else:
+    #     # Legacy hardcoded fallback when no catalog items exist
+    #     battery_unit_price = 520000
+    #     battery_total = num_modules * battery_unit_price
+    #     ac_mcb = num_inverters * 4500
+    #     ac_disconnect = num_inverters * 3500
+    #     ac_spd = num_inverters * 2500
+    #     ac_meter = num_inverters * 8000
+    #     inverter_cost = num_inverters * 180000
+    #     dc_mcb = num_inverters * 15000
+    #     dc_fuse = num_inverters * 8000
+    #     dc_cable_pos = cable_length * 350
+    #     dc_cable_neg = cable_length * 350
+    #     hmi = 18000
+    #     enclosure = 24000 * num_inverters
+    #     ups_control = 14000
 
-    # Enclosure, Safety, Aux
-    enclosure = 24000 * num_inverters
-    ups_control = 14000
-    firefighting = 35000
-    hvac = 45000
-    cable_tray = 25000
-    cable_misc = 15000
-    earthing = 12000
-    lighting = 8000
-    signage = 3000
-
-    bom_equipment_total = (
-        battery_total + ac_mcb + ac_disconnect + ac_spd + ac_meter + ac_cts + ac_panel
-        + inverter_cost + inv_comm + dc_mcb + dc_fuse + dc_cable_pos + dc_cable_neg
-        + dc_lugs + dc_spd + dc_shunt + hmi + enclosure + ups_control + firefighting
-        + hvac + cable_tray + cable_misc + earthing + lighting + signage
-    )
+    #     bom_items = [
+    #         {"id": 1, "category": "Battery System", "description": "Battery Module/Pack – Complete", "qty": num_modules, "unit": "system", "spec": f"51.2V, 1020Ah, {inp.battery_module_kwh}kWh", "unit_price": battery_unit_price, "line_total": battery_total},
+    #         {"id": 5, "category": "AC Side", "description": "AC Main Circuit Breaker", "qty": num_inverters, "unit": "pcs", "spec": "125A, 400–690VAC", "unit_price": 4500, "line_total": ac_mcb},
+    #         {"id": 6, "category": "AC Side", "description": "AC Disconnect Switch", "qty": num_inverters, "unit": "pcs", "spec": "125A, 400–690VAC", "unit_price": 3500, "line_total": ac_disconnect},
+    #         {"id": 7, "category": "AC Side", "description": "AC Surge Protection Device", "qty": num_inverters, "unit": "pcs", "spec": "400VAC, 40kA", "unit_price": 2500, "line_total": ac_spd},
+    #         {"id": 8, "category": "AC Side", "description": "AC Power Meter", "qty": num_inverters, "unit": "pcs", "spec": "0.5S class, Modbus", "unit_price": 8000, "line_total": ac_meter},
+    #         {"id": 11, "category": "Inverter/PCS", "description": "Hybrid Inverter 50kW", "qty": num_inverters, "unit": "pcs", "spec": "50kW, 48–58V DC, 3-ph 400VAC", "unit_price": 180000, "line_total": inverter_cost},
+    #         {"id": 13, "category": "DC Side", "description": "DC Main Circuit Breaker", "qty": num_inverters, "unit": "pcs", "spec": "800A, 80–100VDC", "unit_price": 15000, "line_total": dc_mcb},
+    #         {"id": 14, "category": "DC Side", "description": "DC Fused Disconnect", "qty": num_inverters, "unit": "pcs", "spec": "630–800A, 80VDC", "unit_price": 8000, "line_total": dc_fuse},
+    #         {"id": 15, "category": "DC Cabling", "description": "DC Power Cable +ve", "qty": cable_length, "unit": "m", "spec": "240mm², 1000VDC, red", "unit_price": 350, "line_total": dc_cable_pos},
+    #         {"id": 16, "category": "DC Cabling", "description": "DC Power Cable -ve", "qty": cable_length, "unit": "m", "spec": "240mm², 1000VDC, black", "unit_price": 350, "line_total": dc_cable_neg},
+    #         {"id": 22, "category": "EMS", "description": "HMI Touchscreen Panel", "qty": 1, "unit": "pcs", "spec": "10–12 inch, IP65", "unit_price": 18000, "line_total": hmi},
+    #         {"id": 39, "category": "Auxiliary", "description": "UPS for Controls 24VDC 500VA", "qty": 1, "unit": "pcs", "spec": "APC BE600M1", "unit_price": 14000, "line_total": ups_control},
+    #         {"id": 44, "category": "Enclosure", "description": "Control Cabinet 800×600×300", "qty": num_inverters, "unit": "pcs", "spec": "IP66", "unit_price": 24000, "line_total": enclosure},
+    #     ]
+    #     bom_equipment_total = sum(item["line_total"] for item in bom_items)
 
     installation_cost = bom_equipment_total * (inp.installation_pct / 100)
     commissioning_cost = bom_equipment_total * (inp.commissioning_pct / 100)
@@ -293,24 +616,6 @@ def calculate_bess(inp: BESSInputs) -> dict:
         },
     }
 
-    # --- BOM ITEMS ---
-    bom_items = [
-        {"id": 1, "category": "Battery System", "description": "Battery Module/Pack – Complete", "qty": num_modules, "unit": "system", "spec": f"51.2V, 1020Ah, {inp.battery_module_kwh}kWh", "unit_price": battery_unit_price, "line_total": battery_total},
-        {"id": 5, "category": "AC Side", "description": "AC Main Circuit Breaker", "qty": num_inverters, "unit": "pcs", "spec": "125A, 400–690VAC", "unit_price": 4500, "line_total": ac_mcb},
-        {"id": 6, "category": "AC Side", "description": "AC Disconnect Switch", "qty": num_inverters, "unit": "pcs", "spec": "125A, 400–690VAC", "unit_price": 3500, "line_total": ac_disconnect},
-        {"id": 7, "category": "AC Side", "description": "AC Surge Protection Device", "qty": num_inverters, "unit": "pcs", "spec": "400VAC, 40kA", "unit_price": 2500, "line_total": ac_spd},
-        {"id": 8, "category": "AC Side", "description": "AC Power Meter", "qty": num_inverters, "unit": "pcs", "spec": "0.5S class, Modbus", "unit_price": 8000, "line_total": ac_meter},
-        {"id": 11, "category": "Inverter/PCS", "description": "Hybrid Inverter 50kW", "qty": num_inverters, "unit": "pcs", "spec": "50kW, 48–58V DC, 3-ph 400VAC", "unit_price": 180000, "line_total": inverter_cost},
-        {"id": 13, "category": "DC Side", "description": "DC Main Circuit Breaker", "qty": num_inverters, "unit": "pcs", "spec": "800A, 80–100VDC", "unit_price": 15000, "line_total": dc_mcb},
-        {"id": 14, "category": "DC Side", "description": "DC Fused Disconnect", "qty": num_inverters, "unit": "pcs", "spec": "630–800A, 80VDC", "unit_price": 8000, "line_total": dc_fuse},
-        {"id": 15, "category": "DC Cabling", "description": "DC Power Cable +ve", "qty": cable_length, "unit": "m", "spec": "240mm², 1000VDC, red", "unit_price": 350, "line_total": dc_cable_pos},
-        {"id": 16, "category": "DC Cabling", "description": "DC Power Cable -ve", "qty": cable_length, "unit": "m", "spec": "240mm², 1000VDC, black", "unit_price": 350, "line_total": dc_cable_neg},
-        {"id": 20, "category": "EMS", "description": "EMS Controller / Software", "qty": 1, "unit": "system", "spec": "Supports 50–500kWh", "unit_price": 0, "line_total": 0},
-        {"id": 22, "category": "EMS", "description": "HMI Touchscreen Panel", "qty": 1, "unit": "pcs", "spec": "10–12 inch, IP65", "unit_price": 18000, "line_total": hmi},
-        {"id": 39, "category": "Auxiliary", "description": "UPS for Controls 24VDC 500VA", "qty": 1, "unit": "pcs", "spec": "APC BE600M1", "unit_price": 14000, "line_total": ups_control},
-        {"id": 44, "category": "Enclosure", "description": "Control Cabinet 800×600×300", "qty": num_inverters, "unit": "pcs", "spec": "IP66", "unit_price": 24000, "line_total": enclosure},
-    ]
-
     return {
         "sizing": {
             "required_energy_kwh": round(required_energy, 1),
@@ -371,17 +676,19 @@ def calculate_bess(inp: BESSInputs) -> dict:
 # ─── API Endpoints ────────────────────────────────────────────────────────────
 
 @app.post("/api/calculate")
-async def calculate(inp: BESSInputs, db: Session = Depends(get_db)):
-    result = calculate_bess(inp)
+async def calculate(inp: BESSInputs, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    # Fetch admin-managed BOM catalog to use in calculation
+    catalog_items = db.query(models.ComponentCatalog).all()
+    result = calculate_bess(inp, catalog_items=catalog_items if catalog_items else None)
     # Store in DB
-    record = crud.create_calculation(db, inp.dict(), result)
+    record = crud.create_calculation(db, inp.dict(), result, user_id=current_user.id)
     ts = getattr(record, "created_at", None) or getattr(record, "timestamp", None)
     return {"id": record.id, "timestamp": ts.isoformat() if ts else None, **result}
 
 
 @app.get("/api/calculations")
-async def list_calculations(limit: int = 20, db: Session = Depends(get_db)):
-    records = crud.list_calculations(db, limit)
+async def list_calculations(limit: int = 20, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    records = crud.list_calculations(db, limit, user_id=None if current_user.role == "admin" else current_user.id)
     return [
         {
             "id": r.id,
@@ -397,8 +704,8 @@ async def list_calculations(limit: int = 20, db: Session = Depends(get_db)):
 
 
 @app.get("/api/calculations/{calc_id}")
-async def get_calculation(calc_id: int, db: Session = Depends(get_db)):
-    record = crud.get_calculation(db, calc_id)
+async def get_calculation(calc_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    record = crud.get_calculation(db, calc_id, user_id=current_user.id, is_admin=current_user.role == "admin")
     if not record:
         raise HTTPException(status_code=404, detail="Calculation not found")
     ts = getattr(record, "created_at", None) or getattr(record, "timestamp", None)
@@ -411,19 +718,34 @@ async def get_calculation(calc_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/bom/{calc_id}")
-async def get_bom(calc_id: int, db: Session = Depends(get_db)):
+async def get_bom(calc_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    owned_calc = crud.get_calculation(db, calc_id, user_id=current_user.id, is_admin=current_user.role == "admin")
+    if not owned_calc:
+        raise HTTPException(status_code=404, detail="Calculation not found")
     items = crud.get_bom_items(db, calc_id)
-    if not items:
-        raise HTTPException(status_code=404, detail="BOM not found")
-    return [{"id": i.bom_item_id, "category": i.category, "description": i.description,
+    return [{"id": i.id, "category": i.category, "description": i.description,
              "qty": i.qty, "unit": i.unit, "spec": i.spec,
              "unit_price": i.unit_price, "line_total": i.line_total} for i in items]
 
 
 @app.get("/api/suppliers")
-async def list_suppliers(db: Session = Depends(get_db)):
-    suppliers = crud.list_suppliers(db)
-    return suppliers
+async def list_suppliers(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    q = db.query(models.Supplier)
+    if current_user.role != "admin":
+        q = q.filter(models.Supplier.user_id == current_user.id)
+    suppliers = q.order_by(models.Supplier.weighted_score.desc().nullslast(), models.Supplier.id.desc()).all()
+    return [
+        {
+            "id": s.id,
+            "name": s.name,
+            "component_category": s.component_category,
+            "price_score": s.price_score,
+            "technical_score": s.technical_score,
+            "delivery_score": s.delivery_score,
+            "weighted_score": s.weighted_score,
+        }
+        for s in suppliers
+    ]
 
 
 # ─── Permutation & Combination Engine ────────────────────────────────────────
@@ -514,9 +836,10 @@ def calculate_supplier_score(
 # ─── New API Endpoints ───────────────────────────────────────────────────────
 
 @app.post("/api/projects")
-async def create_project(data: dict, db: Session = Depends(get_db)):
+async def create_project(data: dict, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Create new project with energy inputs"""
     project = models.Project(
+        user_id=current_user.id,
         name=data.get("name", "New Project"),
         use_case=data.get("use_case", "EV fast charging"),
         peak_demand_kw=data.get("peak_demand_kw", 400),
@@ -542,19 +865,24 @@ async def create_project(data: dict, db: Session = Depends(get_db)):
 
 
 @app.get("/api/projects")
-async def list_projects(limit: int = 20, db: Session = Depends(get_db)):
+async def list_projects(limit: int = 20, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """List all projects"""
-    projects = db.query(models.Project).order_by(models.Project.created_at.desc()).limit(limit).all()
+    q = db.query(models.Project)
+    if current_user.role != "admin":
+        q = q.filter(models.Project.user_id == current_user.id)
+    projects = q.order_by(models.Project.created_at.desc()).limit(limit).all()
     return [{"id": p.id, "name": p.name, "use_case": p.use_case, 
              "peak_kw": p.peak_demand_kw, "created_at": p.created_at.isoformat()} for p in projects]
 
 
 @app.post("/api/projects/{project_id}/configurations")
-async def generate_project_configs(project_id: int, db: Session = Depends(get_db)):
+async def generate_project_configs(project_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Generate configuration permutations for a project"""
     project = db.query(models.Project).filter(models.Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+    if current_user.role != "admin" and project.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed for this project")
     
     # Create BESSInputs from project
     inp = BESSInputs(
@@ -592,8 +920,14 @@ async def generate_project_configs(project_id: int, db: Session = Depends(get_db
 
 
 @app.get("/api/projects/{project_id}/configurations")
-async def get_project_configs(project_id: int, db: Session = Depends(get_db)):
+async def get_project_configs(project_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Get configurations for a project"""
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if current_user.role != "admin" and project.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed for this project")
+
     configs = db.query(models.Configuration).filter(
         models.Configuration.project_id == project_id
     ).order_by(models.Configuration.rank).all()
@@ -614,11 +948,13 @@ async def get_project_configs(project_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/api/suppliers/{supplier_id}/score")
-async def score_supplier(supplier_id: int, scores: dict, db: Session = Depends(get_db)):
+async def score_supplier(supplier_id: int, scores: dict, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Submit supplier scores"""
     supplier = db.query(models.Supplier).filter(models.Supplier.id == supplier_id).first()
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier not found")
+    if current_user.role != "admin" and supplier.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed for this supplier")
     
     # Get default weights
     weights = scores.get("weights", {
@@ -656,7 +992,7 @@ async def score_supplier(supplier_id: int, scores: dict, db: Session = Depends(g
 
 
 @app.get("/api/component-catalog")
-async def list_component_catalog(db: Session = Depends(get_db)):
+async def list_component_catalog(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """List all components in catalog"""
     items = db.query(models.ComponentCatalog).filter(
         models.ComponentCatalog.is_active == True
@@ -679,17 +1015,18 @@ async def list_component_catalog(db: Session = Depends(get_db)):
 
 
 @app.post("/api/scoring-weights")
-async def set_scoring_weights(data: dict, db: Session = Depends(get_db)):
+async def set_scoring_weights(data: dict, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Set custom scoring weights"""
     category = data.get("component_category", "default")
+    scoped_key = f"{current_user.id}:{category}"
     weights = data.get("weights", {})
 
     sw = db.query(models.ScoringWeight).filter(
-        models.ScoringWeight.user_id == category
+        models.ScoringWeight.user_id == scoped_key
     ).first()
 
     if sw is None:
-        sw = models.ScoringWeight(user_id=category)
+        sw = models.ScoringWeight(user_id=scoped_key)
         db.add(sw)
 
     # Map API payload keys to current model fields.
@@ -705,10 +1042,11 @@ async def set_scoring_weights(data: dict, db: Session = Depends(get_db)):
 
 
 @app.get("/api/scoring-weights")
-async def get_scoring_weights(component_category: str = "default", db: Session = Depends(get_db)):
+async def get_scoring_weights(component_category: str = "default", db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Get scoring weights for a category"""
+    scoped_key = f"{current_user.id}:{component_category}"
     row = db.query(models.ScoringWeight).filter(
-        models.ScoringWeight.user_id == component_category
+        models.ScoringWeight.user_id == scoped_key
     ).first()
 
     if not row:

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useProjectStore } from '../store';
 
 // Sub-Megawatt only configuration
@@ -57,16 +57,53 @@ const numericDefaults: Record<string, number> = {
 const API_BASE = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL || "http://localhost:8000";
 
 type ProjectWizardProps = {
+  authToken?: string | null;
+  initialInputs?: Record<string, any> | null;
+  initialConfig?: SystemConfig;
+  isEditMode?: boolean;
+  onCancelEdit?: () => void;
   onOptimizationComplete?: (payload: { result: any; inputs: any; calcId: number; projectId: number | null }) => void;
 };
 
-export function ProjectWizard({ onOptimizationComplete }: ProjectWizardProps) {
+export function ProjectWizard({
+  authToken,
+  initialInputs,
+  initialConfig,
+  isEditMode = false,
+  onCancelEdit,
+  onOptimizationComplete,
+}: ProjectWizardProps) {
   const { setProject } = useProjectStore();
   const [step, setStep] = useState(1);
   const [config, setConfig] = useState<SystemConfig>(null);
   const [inputs, setInputs] = useState(defaultInputs);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!initialInputs) {
+      return;
+    }
+
+    const nextInputs: Record<string, string> = { ...defaultInputs };
+    Object.keys(nextInputs).forEach((key) => {
+      const raw = initialInputs[key];
+      if (raw === null || raw === undefined) return;
+      nextInputs[key] = String(raw);
+    });
+
+    setInputs(nextInputs as typeof defaultInputs);
+    setConfig(initialConfig || inferConfig(initialInputs));
+    setStep(2);
+  }, [initialInputs, initialConfig]);
+
+  const authHeaders = () => {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (authToken) {
+      headers.Authorization = `Bearer ${authToken}`;
+    }
+    return headers;
+  };
 
   const handleCalculate = async () => {
     setLoading(true);
@@ -89,7 +126,7 @@ export function ProjectWizard({ onOptimizationComplete }: ProjectWizardProps) {
 
       const res = await fetch(`${API_BASE}/api/calculate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({
           ...numericInputs,
           use_case: numericInputs.use_case || 'Sub-MW BESS',
@@ -105,7 +142,7 @@ export function ProjectWizard({ onOptimizationComplete }: ProjectWizardProps) {
       try {
         const projectRes = await fetch(`${API_BASE}/api/projects`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: authHeaders(),
           body: JSON.stringify({
             ...numericInputs,
             name: `Project ${new Date().toISOString()}`,
@@ -120,7 +157,7 @@ export function ProjectWizard({ onOptimizationComplete }: ProjectWizardProps) {
           if (projectId) {
             await fetch(`${API_BASE}/api/projects/${projectId}/configurations`, {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: authHeaders(),
             });
           }
         }
@@ -283,8 +320,9 @@ export function ProjectWizard({ onOptimizationComplete }: ProjectWizardProps) {
 
         <div className="btn-row">
           <button className="btn-secondary" onClick={() => setStep(1)}>Back</button>
+          {isEditMode && <button className="btn-secondary" onClick={onCancelEdit}>Cancel Edit</button>}
           <button className="btn-primary" onClick={handleCalculate} disabled={loading}>
-            {loading ? 'Calculating...' : 'Run Optimization'}
+            {loading ? 'Calculating...' : isEditMode ? 'Update & Recalculate' : 'Run Optimization'}
           </button>
         </div>
       </div>
@@ -328,4 +366,14 @@ function getConfigLabel(config: SystemConfig): string {
     case 'solar-bess-dg': return 'Solar + BESS + DG';
     default: return '';
   }
+}
+
+function inferConfig(inputs: Record<string, any>): SystemConfig {
+  const hasSolar = Number(inputs?.solar_pv_kwp || 0) > 0;
+  const hasDG = Number(inputs?.dg_capacity_kw || 0) > 0;
+
+  if (hasSolar && hasDG) return 'bess-solar-dg';
+  if (hasSolar) return 'bess-solar';
+  if (hasDG) return 'solar-bess-dg';
+  return 'bess-only';
 }

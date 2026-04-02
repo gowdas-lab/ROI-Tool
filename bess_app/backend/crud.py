@@ -3,11 +3,12 @@ import models
 import datetime
 
 
-def create_calculation(db: Session, inputs: dict, results: dict):
+def create_calculation(db: Session, inputs: dict, results: dict, user_id: int | None = None):
     record = models.Calculation(
         use_case=inputs.get("use_case", ""),
         inputs=inputs,
         results=results,
+        user_id=user_id,
     )
     db.add(record)
     db.flush()
@@ -42,8 +43,9 @@ def create_calculation(db: Session, inputs: dict, results: dict):
 
     # Audit log
     log = models.AuditLog(
+        user_id=str(user_id) if user_id is not None else None,
         action="CALCULATE",
-        entity_type="calculations",
+        entity_type="Calculation",
         entity_id=record.id,
         changes={
             "use_case": inputs.get("use_case"),
@@ -56,15 +58,21 @@ def create_calculation(db: Session, inputs: dict, results: dict):
     return record
 
 
-def list_calculations(db: Session, limit: int = 20):
+def list_calculations(db: Session, limit: int = 20, user_id: int | None = None):
     order_col = getattr(models.Calculation, "created_at", None)
     if order_col is None:
         order_col = getattr(models.Calculation, "timestamp", models.Calculation.id)
-    return db.query(models.Calculation).order_by(order_col.desc()).limit(limit).all()
+    q = db.query(models.Calculation)
+    if user_id is not None and hasattr(models.Calculation, "user_id"):
+        q = q.filter(models.Calculation.user_id == user_id)
+    return q.order_by(order_col.desc()).limit(limit).all()
 
 
-def get_calculation(db: Session, calc_id: int):
-    return db.query(models.Calculation).filter(models.Calculation.id == calc_id).first()
+def get_calculation(db: Session, calc_id: int, user_id: int | None = None, is_admin: bool = False):
+    q = db.query(models.Calculation).filter(models.Calculation.id == calc_id)
+    if not is_admin and user_id is not None and hasattr(models.Calculation, "user_id"):
+        q = q.filter(models.Calculation.user_id == user_id)
+    return q.first()
 
 
 def get_bom_items(db: Session, calc_id: int):
@@ -109,10 +117,11 @@ def create_supplier(db: Session, data: dict):
     )
     db.add(s)
     log = models.AuditLog(
+        user_id=None,
         action="CREATE",
-        table_name="suppliers",
-        record_id=None,
-        details={"name": s.name},
+        entity_type="Supplier",
+        entity_id=s.id,
+        changes={"name": s.name},
     )
     db.add(log)
     db.commit()

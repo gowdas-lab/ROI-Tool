@@ -5,6 +5,7 @@
 -- Suppliers
 CREATE TABLE IF NOT EXISTS suppliers (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER,
     name VARCHAR(200) NOT NULL,
     component_category VARCHAR(100),
     country VARCHAR(100),
@@ -41,6 +42,7 @@ CREATE TABLE IF NOT EXISTS component_catalog (
 -- Projects
 CREATE TABLE IF NOT EXISTS projects (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
     name VARCHAR(200),
@@ -214,10 +216,19 @@ CREATE TABLE IF NOT EXISTS audit_log (
 -- Legacy Tables
 CREATE TABLE IF NOT EXISTS calculations (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER,
     timestamp TIMESTAMP DEFAULT NOW(),
     use_case VARCHAR(100),
     inputs JSONB,
     results JSONB
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(200) UNIQUE NOT NULL,
+    password_hash VARCHAR(256) NOT NULL,
+    role VARCHAR(20) DEFAULT 'user',
+    created_at TIMESTAMP DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS bom_items (
