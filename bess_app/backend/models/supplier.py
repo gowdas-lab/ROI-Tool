@@ -9,6 +9,7 @@ class Supplier(Base):
     __tablename__ = "suppliers"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
     name = Column(String(200), nullable=False)
     component_category = Column(String(100))
     country = Column(String(100))
