@@ -6,9 +6,11 @@ from .permutations import router as permutations_router
 from .analytics import router as analytics_router
 from .scoring_weights import router as weights_router
 from .admin import router as admin_router
+from .auth import router as auth_router
 
 router = APIRouter()
 
+router.include_router(auth_router)
 router.include_router(projects_router, prefix="/projects", tags=["projects"])
 router.include_router(bom_router, prefix="/bom", tags=["bom"])
 router.include_router(suppliers_router, prefix="/suppliers", tags=["suppliers"])

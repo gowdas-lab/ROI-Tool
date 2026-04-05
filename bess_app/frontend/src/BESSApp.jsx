@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import "./BESSApp.css";
 import { ProjectWizard } from "./pages";
+import { useAuthStore } from "./store/authStore";
 
 const API_BASE = "http://localhost:8000";
 
@@ -175,7 +176,30 @@ function InputsTab({ inputs, onChange, onCalculate, loading }) {
 }
 
 // ── Tab: Sizing ──────────────────────────────────────────────────────────────
-function SizingTab({ data }) {
+function LogoutButton() {
+  const { logout, user } = useAuthStore();
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+      <span style={{ color: '#8b949e', fontSize: '12px' }}>{user?.username}</span>
+      <button
+        onClick={logout}
+        style={{
+          padding: '6px 12px',
+          background: 'transparent',
+          border: '1px solid #30363d',
+          borderRadius: '6px',
+          color: '#f85149',
+          fontSize: '12px',
+          cursor: 'pointer'
+        }}
+      >
+        Logout
+      </button>
+    </div>
+  );
+}
+
+function SizingTab({ data, inputs }) {
   if (!data) return <EmptyState />;
   const { sizing, capex } = data;
   return (
@@ -924,7 +948,16 @@ export default function BESSApp() {
     <div className="bess-app">
       <header className="app-header">
         <div className="header-left">
-          <div className="logo-mark">⚡</div>
+          <img 
+            src="/assets/elektron-logo.png" 
+            alt="Elektron" 
+            style={{
+              width: '40px',
+              height: '40px',
+              marginRight: '12px',
+              objectFit: 'contain'
+            }}
+          />
           <div>
             <div className="app-title">BESS Optimality</div>
             <div className="app-subtitle">Sub-MWh Battery Storage Optimisation Tool · Elektron RE</div>
@@ -939,6 +972,7 @@ export default function BESSApp() {
               <div className="h-kpi"><span className="h-kpi-val">{result.roi?.simple_payback_yrs} yrs</span><span className="h-kpi-label">Payback</span></div>
             </div>
           )}
+          <LogoutButton />
         </div>
       </header>
 

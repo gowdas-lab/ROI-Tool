@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>BESS Backend Admin Panel</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface2: #21262d;
+  --border: #30363d;
+  --border2: #484f58;
+  --accent: #238636;
+  --accent2: #58a6ff;
+  --danger: #da3633;
+  --warn: #d29922;
+  --text: #c9d1d9;
+  --text2: #8b949e;
+  --mono: 'SF Mono', monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); }
+
+.container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+
+/* Header */
+.header { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+.header h1 { font-size: 24px; font-weight: 600; color: var(--accent); }
+.header-right { display: flex; gap: 10px; align-items: center; }
+.api-status { font-size: 12px; padding: 4px 10px; border-radius: 12px; background: var(--surface2); }
+.api-status.connected { background: rgba(35, 134, 54, 0.2); color: var(--accent); }
+.api-status.error { background: rgba(218, 54, 51, 0.2); color: var(--danger); }
+
+/* Tabs */
+.tabs { display: flex; gap: 4px; margin-bottom: 20px; }
+.tab { padding: 10px 20px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px 6px 0 0; cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text2); transition: all 0.2s; }
+.tab:hover { background: var(--surface2); color: var(--text); }
+.tab.active { background: var(--accent); color: white; border-color: var(--accent); }
+
+/* Content */
+.content { background: var(--surface); border: 1px solid var(--border); border-radius: 0 8px 8px 8px; padding: 20px; min-height: 500px; }
+
+/* Toolbar */
+.toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px; }
+.search-box { flex: 1; max-width: 400px; }
+.search-box input { width: 100%; padding: 8px 12px; background: var(--bg); border: 1px solid var(--border2); border-radius: 6px; color: var(--text); font-size: 14px; }
+.search-box input:focus { outline: none; border-color: var(--accent); }
+
+/* Buttons */
+.btn { padding: 8px 16px; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; border: none; transition: all 0.2s; }
+.btn-primary { background: var(--accent); color: white; }
+.btn-primary:hover { background: #2ea043; }
+.btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border2); }
+.btn-secondary:hover { background: var(--border); }
+.btn-danger { background: var(--danger); color: white; }
+.btn-danger:hover { background: #f85149; }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+
+/* Table */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { padding: 12px; text-align: left; border-bottom: 1px solid var(--border); }
+th { background: var(--surface2); font-weight: 600; color: var(--text2); font-size: 12px; text-transform: uppercase; }
+tr:hover { background: rgba(255,255,255,0.02); }
+.td-mono { font-family: var(--mono); font-size: 12px; }
+.td-actions { display: flex; gap: 8px; }
+
+/* Modal */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 1000; }
+.modal-overlay.open { display: flex; }
+.modal { background: var(--surface); border: 1px solid var(--border2); border-radius: 12px; width: 90%; max-width: 600px; max-height: 90vh; overflow: hidden; }
+.modal-header { padding: 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+.modal-header h2 { font-size: 18px; }
+.modal-body { padding: 20px; overflow-y: auto; max-height: 60vh; }
+.modal-footer { padding: 20px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; }
+
+/* Form */
+.form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+.form-group { display: flex; flex-direction: column; gap: 6px; }
+.form-group.full { grid-column: 1 / -1; }
+label { font-size: 12px; font-weight: 600; color: var(--text2); text-transform: uppercase; }
+input, select, textarea { padding: 10px; background: var(--bg); border: 1px solid var(--border2); border-radius: 6px; color: var(--text); font-size: 14px; }
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+textarea { resize: vertical; min-height: 80px; }
+
+/* Stats */
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
+.stat-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+.stat-value { font-size: 28px; font-weight: 700; color: var(--accent); }
+.stat-label { font-size: 12px; color: var(--text2); margin-top: 4px; }
+
+/* Toast */
+.toast-container { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 2000; }
+.toast { background: var(--surface); border: 1px solid var(--border2); border-radius: 8px; padding: 12px 16px; display: flex; align-items: center; gap: 8px; animation: slideIn 0.3s ease; }
+.toast.success { border-left: 3px solid var(--accent); }
+.toast.error { border-left: 3px solid var(--danger); }
+@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+.empty { text-align: center; padding: 60px 20px; color: var(--text2); }
+.empty-icon { font-size: 48px; margin-bottom: 16px; }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+.badge-green { background: rgba(35, 134, 54, 0.2); color: var(--accent); }
+.badge-blue { background: rgba(88, 166, 255, 0.2); color: var(--accent2); }
+
+@media (max-width: 768px) {
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .form-grid { grid-template-columns: 1fr; }
+  .toolbar { flex-direction: column; align-items: stretch; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div style="display: flex; align-items: center; gap: 12px;">
+      <img src="/assets/elektron-logo.png" alt="Elektron" style="height: 40px; width: auto;">
+      <h1>BESS Backend Admin Panel</h1>
+    </div>
+    <div class="header-right">
+      <span id="api-status" class="api-status">Connecting...</span>
+      <button class="btn btn-secondary btn-sm" onclick="refreshData()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('bom')">BOM Items</button>
+    <button class="tab" onclick="switchTab('suppliers')">Suppliers</button>
+  </div>
+
+  <div class="content" id="content">
+    <!-- Content loaded dynamically -->
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modal" onclick="closeModal(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2 id="modal-title">Add Item</h2>
+      <button class="btn btn-secondary btn-sm" onclick="closeModalDirect()">Close</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModalDirect()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveItem()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toasts"></div>
+
+<script>
+const API_BASE = 'http://localhost:8000/api/admin';
+let currentTab = 'bom';
+let bomItems = [];
+let suppliers = [];
+let editingId = null;
+
+// Initialize
+async function init() {
+  await checkApiStatus();
+  await refreshData();
+}
+
+async function checkApiStatus() {
+  const statusEl = document.getElementById('api-status');
+  try {
+    const res = await fetch(`${API_BASE}/bom`, { method: 'GET' });
+    if (res.ok) {
+      statusEl.textContent = 'Connected';
+      statusEl.className = 'api-status connected';
+    } else {
+      throw new Error('API Error');
+    }
+  } catch (e) {
+    statusEl.textContent = 'API Error';
+    statusEl.className = 'api-status error';
+    showToast('Cannot connect to backend API', 'error');
+  }
+}
+
+async function refreshData() {
+  await loadBOM();
+  await loadSuppliers();
+  render();
+}
+
+async function loadBOM() {
+  try {
+    const res = await fetch(`${API_BASE}/bom`);
+    if (res.ok) bomItems = await res.json();
+  } catch (e) {
+    showToast('Failed to load BOM items', 'error');
+  }
+}
+
+async function loadSuppliers() {
+  try {
+    const res = await fetch(`${API_BASE}/suppliers`);
+    if (res.ok) suppliers = await res.json();
+  } catch (e) {
+    showToast('Failed to load suppliers', 'error');
+  }
+}
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+  render();
+}
+
+function render() {
+  const content = document.getElementById('content');
+  if (currentTab === 'bom') {
+    content.innerHTML = renderBOM();
+  } else {
+    content.innerHTML = renderSuppliers();
+  }
+}
+
+function renderBOM() {
+  const totalValue = bomItems.reduce((s, i) => s + (i.unit_price || 0), 0);
+  
+  return `
+    <div class="stats">
+      <div class="stat-card">
+        <div class="stat-value">${bomItems.length}</div>
+        <div class="stat-label">Total BOM Items</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">₹${totalValue.toLocaleString()}</div>
+        <div class="stat-label">Total Value</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${new Set(bomItems.map(i => i.category)).size}</div>
+        <div class="stat-label">Categories</div>
+      </div>
+    </div>
+    <div class="toolbar">
+      <div class="search-box">
+        <input type="text" placeholder="Search BOM items..." oninput="filterBOM(this.value)">
+      </div>
+      <button class="btn btn-primary" onclick="openBOMModal()">+ Add BOM Item</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>BOM #</th>
+            <th>Category</th>
+            <th>Description</th>
+            <th>Qty Formula</th>
+            <th>Unit</th>
+            <th>Price (₹)</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${bomItems.length === 0 ? '<tr><td colspan="8"><div class="empty"><div class="empty-icon">📦</div>No BOM items found</div></td></tr>' : ''}
+          ${bomItems.map(item => `
+            <tr>
+              <td class="td-mono">${item.id}</td>
+              <td class="td-mono">${item.bom_number || '-'}</td>
+              <td><span class="badge badge-green">${item.category || '-'}</span></td>
+              <td>${item.description || '-'}</td>
+              <td class="td-mono">${item.qty_formula || '1'}</td>
+              <td>${item.unit || 'pcs'}</td>
+              <td class="td-mono">₹${(item.unit_price || 0).toLocaleString()}</td>
+              <td class="td-actions">
+                <button class="btn btn-secondary btn-sm" onclick="editBOM(${item.id})">Edit</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteBOM(${item.id})">Delete</button>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderSuppliers() {
+  return `
+    <div class="stats">
+      <div class="stat-card">
+        <div class="stat-value">${suppliers.length}</div>
+        <div class="stat-label">Total Suppliers</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${suppliers.filter(s => s.tier === 'Tier-1').length}</div>
+        <div class="stat-label">Tier-1</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${suppliers.filter(s => s.tier === 'Indian OEM').length}</div>
+        <div class="stat-label">Indian OEM</div>
+      </div>
+    </div>
+    <div class="toolbar">
+      <div class="search-box">
+        <input type="text" placeholder="Search suppliers..." oninput="filterSuppliers(this.value)">
+      </div>
+      <button class="btn btn-primary" onclick="openSupplierModal()">+ Add Supplier</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Country</th>
+            <th>Tier</th>
+            <th>Score</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${suppliers.length === 0 ? '<tr><td colspan="6"><div class="empty"><div class="empty-icon">🏭</div>No suppliers found</div></td></tr>' : ''}
+          ${suppliers.map(s => `
+            <tr>
+              <td class="td-mono">${s.id}</td>
+              <td><strong>${s.name}</strong></td>
+              <td>${s.country || '-'}</td>
+              <td><span class="badge ${s.tier === 'Tier-1' ? 'badge-blue' : 'badge-green'}">${s.tier || '-'}</span></td>
+              <td class="td-mono">${s.weighted_score ? s.weighted_score.toFixed(1) : '-'}</td>
+              <td class="td-actions">
+                <button class="btn btn-secondary btn-sm" onclick="editSupplier(${s.id})">Edit</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteSupplier(${s.id})">Delete</button>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+// Modal Functions
+function openBOMModal(item = null) {
+  editingId = item?.id || null;
+  document.getElementById('modal-title').textContent = item ? 'Edit BOM Item' : 'Add BOM Item';
+  document.getElementById('modal-body').innerHTML = `
+    <div class="form-grid">
+      <div class="form-group">
+        <label>BOM Number</label>
+        <input type="number" id="bom_number" value="${item?.bom_number || ''}">
+      </div>
+      <div class="form-group">
+        <label>Category</label>
+        <input type="text" id="category" value="${item?.category || ''}" placeholder="e.g. BATTERY SYSTEM">
+      </div>
+      <div class="form-group full">
+        <label>Description</label>
+        <input type="text" id="description" value="${item?.description || ''}">
+      </div>
+      <div class="form-group">
+        <label>Qty Formula</label>
+        <input type="text" id="qty_formula" value="${item?.qty_formula || '1'}" placeholder="n, inv, inv*3">
+      </div>
+      <div class="form-group">
+        <label>Unit</label>
+        <input type="text" id="unit" value="${item?.unit || 'pcs'}">
+      </div>
+      <div class="form-group">
+        <label>Unit Price (₹)</label>
+        <input type="number" id="unit_price" value="${item?.unit_price || 0}">
+      </div>
+      <div class="form-group">
+        <label>Specification</label>
+        <input type="text" id="spec" value="${item?.spec || ''}">
+      </div>
+    </div>
+  `;
+  document.getElementById('modal').classList.add('open');
+}
+
+function openSupplierModal(supplier = null) {
+  editingId = supplier?.id || null;
+  document.getElementById('modal-title').textContent = supplier ? 'Edit Supplier' : 'Add Supplier';
+  document.getElementById('modal-body').innerHTML = `
+    <div class="form-grid">
+      <div class="form-group full">
+        <label>Name</label>
+        <input type="text" id="name" value="${supplier?.name || ''}">
+      </div>
+      <div class="form-group">
+        <label>Country</label>
+        <input type="text" id="country" value="${supplier?.country || 'India'}">
+      </div>
+      <div class="form-group">
+        <label>Tier</label>
+        <select id="tier">
+          <option value="Tier-1" ${supplier?.tier === 'Tier-1' ? 'selected' : ''}>Tier-1</option>
+          <option value="Indian OEM" ${supplier?.tier === 'Indian OEM' ? 'selected' : ''}>Indian OEM</option>
+          <option value="OEM/EMS" ${supplier?.tier === 'OEM/EMS' ? 'selected' : ''}>OEM/EMS</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Price Score</label>
+        <input type="number" id="price_score" value="${supplier?.price_score || ''}" step="0.1" placeholder="0-100">
+      </div>
+      <div class="form-group">
+        <label>Technical Score</label>
+        <input type="number" id="technical_score" value="${supplier?.technical_score || ''}" step="0.1">
+      </div>
+      <div class="form-group">
+        <label>Delivery Score</label>
+        <input type="number" id="delivery_score" value="${supplier?.delivery_score || ''}" step="0.1">
+      </div>
+    </div>
+  `;
+  document.getElementById('modal').classList.add('open');
+}
+
+function closeModal(e) {
+  if (e.target === document.getElementById('modal')) closeModalDirect();
+}
+
+function closeModalDirect() {
+  document.getElementById('modal').classList.remove('open');
+  editingId = null;
+}
+
+async function saveItem() {
+  if (currentTab === 'bom') await saveBOM();
+  else await saveSupplier();
+}
+
+async function saveBOM() {
+  const data = {
+    bom_number: parseInt(document.getElementById('bom_number').value) || null,
+    category: document.getElementById('category').value,
+    description: document.getElementById('description').value,
+    qty_formula: document.getElementById('qty_formula').value,
+    unit: document.getElementById('unit').value,
+    unit_price: parseFloat(document.getElementById('unit_price').value) || 0,
+    spec: document.getElementById('spec').value,
+  };
+
+  try {
+    const url = editingId ? `${API_BASE}/bom/${editingId}` : `${API_BASE}/bom`;
+    const method = editingId ? 'PUT' : 'POST';
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+
+    if (res.ok) {
+      showToast(editingId ? 'BOM item updated' : 'BOM item created', 'success');
+      closeModalDirect();
+      await loadBOM();
+      render();
+    } else {
+      throw new Error('Failed to save');
+    }
+  } catch (e) {
+    showToast('Error saving BOM item', 'error');
+  }
+}
+
+async function saveSupplier() {
+  const data = {
+    name: document.getElementById('name').value,
+    country: document.getElementById('country').value,
+    tier: document.getElementById('tier').value,
+    price_score: parseFloat(document.getElementById('price_score').value) || null,
+    technical_score: parseFloat(document.getElementById('technical_score').value) || null,
+    delivery_score: parseFloat(document.getElementById('delivery_score').value) || null,
+  };
+
+  try {
+    const url = editingId ? `${API_BASE}/suppliers/${editingId}` : `${API_BASE}/suppliers`;
+    const method = editingId ? 'PUT' : 'POST';
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+
+    if (res.ok) {
+      showToast(editingId ? 'Supplier updated' : 'Supplier created', 'success');
+      closeModalDirect();
+      await loadSuppliers();
+      render();
+    } else {
+      throw new Error('Failed to save');
+    }
+  } catch (e) {
+    showToast('Error saving supplier', 'error');
+  }
+}
+
+async function editBOM(id) {
+  const item = bomItems.find(i => i.id === id);
+  if (item) openBOMModal(item);
+}
+
+async function editSupplier(id) {
+  const s = suppliers.find(s => s.id === id);
+  if (s) openSupplierModal(s);
+}
+
+async function deleteBOM(id) {
+  if (!confirm('Delete this BOM item?')) return;
+  try {
+    const res = await fetch(`${API_BASE}/bom/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      showToast('BOM item deleted', 'success');
+      await loadBOM();
+      render();
+    }
+  } catch (e) {
+    showToast('Error deleting BOM item', 'error');
+  }
+}
+
+async function deleteSupplier(id) {
+  if (!confirm('Delete this supplier?')) return;
+  try {
+    const res = await fetch(`${API_BASE}/suppliers/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      showToast('Supplier deleted', 'success');
+      await loadSuppliers();
+      render();
+    }
+  } catch (e) {
+    showToast('Error deleting supplier', 'error');
+  }
+}
+
+function filterBOM(query) {
+  // Simple client-side filter - re-render would need to preserve original data
+  // For now, just re-fetch from server
+  render();
+}
+
+function filterSuppliers(query) {
+  render();
+}
+
+function showToast(message, type = 'success') {
+  const container = document.getElementById('toasts');
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
+}
+
+// Start
+init();
+</script>
+</body>
+</html>
