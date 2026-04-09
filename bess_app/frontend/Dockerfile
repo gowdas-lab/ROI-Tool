@@ -1,7 +1,7 @@
-FROM node:20-alpine
+FROM node:20-slim
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci && npm rebuild esbuild
+COPY package.json package-lock.json* ./
+RUN npm install --no-audit --no-fund && npm rebuild esbuild
 COPY . .
 EXPOSE 3000
-CMD ["npm", "run", "dev"]
+CMD ["node_modules/.bin/vite", "--host", "0.0.0.0", "--port", "3000"]

@@ -7,7 +7,14 @@ export default defineConfig({
     host: true,
     port: 3000,
     proxy: {
-      '/api': 'http://localhost:8000',
-    }
+      '/api': 'http://backend:8000',
+      '/bess-app-admin': 'http://backend:8000',
+    },
+    watch: {
+      usePolling: true,
+    },
+  },
+  optimizeDeps: {
+    entries: ['src/main.jsx'],
   }
 })

@@ -21,6 +21,10 @@ import models
 
 # Import API routes
 from app.api.v1 import router as api_router
+from app.api.v1.auth import TOKEN_SECRET as AUTH_TOKEN_SECRET
+
+# Use consistent token secret from auth module
+TOKEN_SECRET = AUTH_TOKEN_SECRET
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -41,7 +45,7 @@ run_lightweight_migrations()
 
 TEMP_ADMIN_EMAIL = "admin-bess-app@temp-mail.com"
 TEMP_ADMIN_PASSWORD = "12345admin"
-TOKEN_SECRET = os.getenv("AUTH_TOKEN_SECRET", "bess-dev-token-secret-change-me")
+# TOKEN_SECRET is imported from app.api.v1.auth (line 24-27)
 TOKEN_TTL_SECONDS = int(os.getenv("AUTH_TOKEN_TTL_SECONDS", str(7 * 24 * 60 * 60)))
 
 # FastAPI app
@@ -85,8 +89,16 @@ class LoginPayload(BaseModel):
     password: str
 
 
+def _normalize_password(password: str) -> str:
+    """Handle bcrypt's 72-byte limit by pre-hashing long passwords."""
+    if len(password.encode("utf-8")) > 72:
+        return hashlib.sha256(password.encode("utf-8")).hexdigest()
+    return password
+
+
 def _hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    normalized = _normalize_password(password)
+    return bcrypt.hashpw(normalized.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def _is_bcrypt_hash(value: str) -> bool:
@@ -96,10 +108,10 @@ def _is_bcrypt_hash(value: str) -> bool:
 def _verify_password(plain_password: str, stored_hash: str) -> bool:
     if not stored_hash:
         return False
-
+    normalized = _normalize_password(plain_password)
     try:
         if _is_bcrypt_hash(stored_hash):
-            return bcrypt.checkpw(plain_password.encode("utf-8"), stored_hash.encode("utf-8"))
+            return bcrypt.checkpw(normalized.encode("utf-8"), stored_hash.encode("utf-8"))
 
         # Legacy SHA256 support for existing users; upgraded to bcrypt on successful login.
         return hashlib.sha256(plain_password.encode("utf-8")).hexdigest() == stored_hash
@@ -160,21 +172,144 @@ def ensure_temporary_admin() -> None:
         if temp_admin is None:
             temp_admin = models.User(
                 email=TEMP_ADMIN_EMAIL,
-                password_hash=_hash_password(TEMP_ADMIN_PASSWORD),
+                username="admin",
+                hashed_password=_hash_password(TEMP_ADMIN_PASSWORD),
                 role="admin",
+                is_admin=True
             )
             db.add(temp_admin)
             db.commit()
             return
 
         temp_admin.role = "admin"
-        temp_admin.password_hash = _hash_password(TEMP_ADMIN_PASSWORD)
+        temp_admin.is_admin = True
+        temp_admin.hashed_password = _hash_password(TEMP_ADMIN_PASSWORD)
         db.commit()
     finally:
         db.close()
 
 
 ensure_temporary_admin()
+
+
+# ─── Reference Supplier DB ────────────────────────────────────────────────────
+# Each entry: (name, country, tier, component_category, certifications,
+#              price, technical, delivery, warranty, support, cert)
+_SEED_SUPPLIERS = [
+    # Battery System suppliers
+    ("Sungrow", "China", "Tier 1", "BATTERY SYSTEM",
+     ["ISO 9001", "IEC 62619", "UL 9540"], 7.5, 9.2, 8.5, 9.0, 8.5, 9.5),
+    ("BYD", "China", "Tier 1", "BATTERY SYSTEM",
+     ["ISO 9001", "IEC 62619", "UL 9540", "CE"], 8.0, 9.0, 8.0, 9.0, 8.0, 9.0),
+    ("CATL", "China", "Tier 1", "BATTERY SYSTEM",
+     ["ISO 9001", "IEC 62619", "UL 9540", "CE"], 7.0, 9.5, 7.5, 9.5, 8.0, 9.5),
+    ("Panasonic", "Japan", "Tier 1", "BATTERY SYSTEM",
+     ["ISO 9001", "IEC 62619", "UL 9540"], 6.5, 9.3, 8.0, 9.5, 9.0, 9.0),
+    ("Samsung SDI", "South Korea", "Tier 1", "BATTERY SYSTEM",
+     ["ISO 9001", "IEC 62619", "UL 9540"], 6.0, 9.5, 7.5, 9.5, 8.5, 9.5),
+
+    # Power Conversion System (Inverter) suppliers
+    ("Sungrow", "China", "Tier 1", "POWER CONVERSION SYSTEM",
+     ["ISO 9001", "IEC 62477", "UL 1741", "CE"], 8.0, 9.0, 8.5, 9.0, 8.5, 9.0),
+    ("ABB", "Switzerland", "Tier 1", "POWER CONVERSION SYSTEM",
+     ["ISO 9001", "IEC 62477", "UL 1741", "CE", "BIS"], 6.0, 9.5, 9.0, 9.5, 9.5, 9.5),
+    ("Schneider Electric", "France", "Tier 1", "POWER CONVERSION SYSTEM",
+     ["ISO 9001", "IEC 62477", "CE", "BIS"], 6.5, 9.3, 9.0, 9.5, 9.5, 9.3),
+    ("Delta Electronics", "Taiwan", "Tier 1", "POWER CONVERSION SYSTEM",
+     ["ISO 9001", "IEC 62477", "UL 1741", "CE"], 7.5, 9.0, 8.5, 9.0, 8.5, 9.0),
+    ("Sofar Solar", "China", "Tier 2", "POWER CONVERSION SYSTEM",
+     ["ISO 9001", "IEC 62477", "CE"], 8.5, 8.0, 8.0, 8.0, 7.5, 8.0),
+
+    # EMS / BMS suppliers
+    ("Siemens", "Germany", "Tier 1", "EMS",
+     ["ISO 9001", "IEC 61968", "CE", "BIS"], 5.5, 9.8, 9.0, 9.8, 9.8, 9.8),
+    ("Schneider Electric", "France", "Tier 1", "EMS",
+     ["ISO 9001", "IEC 61968", "CE"], 6.0, 9.5, 9.0, 9.5, 9.5, 9.5),
+    ("Enertech", "India", "Tier 2", "EMS",
+     ["ISO 9001"], 8.5, 7.5, 8.0, 7.5, 7.5, 7.0),
+
+    # AC Side (switchgear, breakers)
+    ("ABB", "Switzerland", "Tier 1", "AC SIDE",
+     ["ISO 9001", "IEC 60947", "BIS"], 6.0, 9.5, 9.0, 9.5, 9.5, 9.5),
+    ("Schneider Electric", "France", "Tier 1", "AC SIDE",
+     ["ISO 9001", "IEC 60947", "CE", "BIS"], 6.5, 9.3, 9.0, 9.5, 9.5, 9.3),
+    ("L&T Electrical", "India", "Tier 1", "AC SIDE",
+     ["ISO 9001", "IEC 60947", "BIS"], 8.5, 8.5, 9.0, 9.0, 9.0, 8.5),
+    ("Havells", "India", "Tier 1", "AC SIDE",
+     ["ISO 9001", "BIS"], 8.0, 8.0, 9.0, 8.5, 8.5, 8.0),
+    ("Siemens", "Germany", "Tier 1", "AC SIDE",
+     ["ISO 9001", "IEC 60947", "CE", "BIS"], 6.0, 9.5, 9.0, 9.5, 9.5, 9.5),
+
+    # DC Side (cables, fuses, disconnects)
+    ("Polycab", "India", "Tier 1", "DC SIDE",
+     ["ISO 9001", "BIS"], 9.0, 8.0, 9.0, 8.5, 8.0, 8.0),
+    ("Havells", "India", "Tier 1", "DC SIDE",
+     ["ISO 9001", "BIS"], 8.5, 8.0, 9.0, 8.5, 8.5, 8.0),
+    ("ABB", "Switzerland", "Tier 1", "DC SIDE",
+     ["ISO 9001", "IEC 60947", "BIS"], 6.5, 9.5, 9.0, 9.5, 9.5, 9.5),
+    ("Littelfuse", "USA", "Tier 1", "DC SIDE",
+     ["ISO 9001", "UL 248", "CE"], 7.0, 9.3, 8.5, 9.0, 8.5, 9.0),
+
+    # Enclosure / Civil / Structural
+    ("Rittal", "Germany", "Tier 1", "ENCLOSURE",
+     ["ISO 9001", "IEC 62208", "CE"], 6.0, 9.5, 8.5, 9.5, 9.0, 9.5),
+    ("Delta", "India", "Tier 2", "ENCLOSURE",
+     ["ISO 9001", "BIS"], 8.5, 7.5, 8.5, 7.5, 7.5, 7.5),
+    ("Unifin", "India", "Tier 2", "ENCLOSURE",
+     ["ISO 9001", "BIS"], 8.0, 7.5, 8.5, 8.0, 7.5, 7.5),
+
+    # Auxiliary systems (HVAC, fire suppression)
+    ("Vertiv", "USA", "Tier 1", "AUXILIARY",
+     ["ISO 9001", "UL 1995", "CE"], 6.5, 9.3, 8.5, 9.0, 9.0, 9.0),
+    ("Blue Star", "India", "Tier 1", "AUXILIARY",
+     ["ISO 9001", "BIS"], 8.0, 8.5, 9.0, 8.5, 8.5, 8.0),
+    ("Nohmi Bosai", "Japan", "Tier 1", "AUXILIARY",
+     ["ISO 9001", "UL 2127", "CE"], 6.0, 9.5, 8.5, 9.5, 9.0, 9.5),
+]
+
+# Scoring weights: price=20%, technical=30%, delivery=15%, warranty=15%, support=10%, cert=10%
+_SCORE_WEIGHTS = (0.20, 0.30, 0.15, 0.15, 0.10, 0.10)
+
+
+def seed_suppliers() -> None:
+    """Populate suppliers table if empty."""
+    db = SessionLocal()
+    try:
+        if db.query(models.Supplier).count() > 0:
+            return  # already seeded
+
+        for (name, country, tier, category, certs,
+             price, tech, delivery, warranty, support, cert) in _SEED_SUPPLIERS:
+            ws = (
+                price * _SCORE_WEIGHTS[0]
+                + tech * _SCORE_WEIGHTS[1]
+                + delivery * _SCORE_WEIGHTS[2]
+                + warranty * _SCORE_WEIGHTS[3]
+                + support * _SCORE_WEIGHTS[4]
+                + cert * _SCORE_WEIGHTS[5]
+            )
+            supplier = models.Supplier(
+                user_id=None,  # global / admin-owned
+                name=name,
+                country=country,
+                tier=tier,
+                component_category=category,
+                certifications=certs,
+                price_score=price,
+                technical_score=tech,
+                delivery_score=delivery,
+                warranty_score=warranty,
+                support_score=support,
+                certification_score=cert,
+                weighted_score=round(ws, 2),
+            )
+            db.add(supplier)
+        db.commit()
+    finally:
+        db.close()
+
+
+seed_suppliers()
 
 
 def get_current_user(
@@ -261,7 +396,12 @@ async def signup(payload: SignUpPayload, db: Session = Depends(get_db)):
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    user = models.User(email=email, password_hash=_hash_password(payload.password), role="user")
+    user = models.User(
+        email=email,
+        username=email.split("@")[0],
+        hashed_password=_hash_password(payload.password),
+        role="user"
+    )
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -292,7 +432,13 @@ async def admin_signup(
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    user = models.User(email=email, password_hash=_hash_password(payload.password), role="admin")
+    user = models.User(
+        email=email,
+        username=email.split("@")[0],
+        hashed_password=_hash_password(payload.password),
+        role="admin",
+        is_admin=True
+    )
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -307,18 +453,41 @@ async def admin_signup(
 
 @app.get("/bess-app-admin")
 async def get_admin_accounts(db: Session = Depends(get_db), current_user=Depends(require_admin)):
-    admins = db.query(models.User).filter(models.User.role == "admin").order_by(models.User.created_at.desc()).all()
+    all_users = db.query(models.User).order_by(models.User.created_at.desc()).all()
+
+    def _fmt(u):
+        return {
+            "id": u.id,
+            "email": u.email,
+            "username": getattr(u, "username", None),
+            "is_active": getattr(u, "is_active", True),
+            "created_at": u.created_at.isoformat() if getattr(u, "created_at", None) else None,
+        }
+
     return {
         "created_by": current_user.email,
-        "admins": [
-            {
-                "id": a.id,
-                "email": a.email,
-                "created_at": a.created_at.isoformat() if a.created_at else None,
-            }
-            for a in admins
-        ],
+        "admins": [_fmt(u) for u in all_users if u.role == "admin"],
+        "users":  [_fmt(u) for u in all_users if u.role != "admin"],
     }
+
+
+@app.patch("/api/admin/users/{user_id}")
+async def patch_user(
+    user_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_admin),
+):
+    """Admin: activate / deactivate a user account."""
+    target = db.query(models.User).filter(models.User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target.id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot modify your own account")
+    if "is_active" in payload:
+        target.is_active = bool(payload["is_active"])
+    db.commit()
+    return {"id": target.id, "is_active": target.is_active}
 
 
 @app.post("/bess-app-admin")
@@ -335,7 +504,13 @@ async def create_admin_account(
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    admin_user = models.User(email=email, password_hash=_hash_password(payload.password), role="admin")
+    admin_user = models.User(
+        email=email,
+        username=email.split("@")[0],
+        hashed_password=_hash_password(payload.password),
+        role="admin",
+        is_admin=True
+    )
     db.add(admin_user)
     db.commit()
     db.refresh(admin_user)
@@ -353,11 +528,11 @@ async def login(payload: LoginPayload, db: Session = Depends(get_db)):
     email = payload.email.strip().lower()
     user = db.query(models.User).filter(models.User.email == email).first()
 
-    if not user or not _verify_password(payload.password, user.password_hash):
+    if not user or not _verify_password(payload.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    if not _is_bcrypt_hash(user.password_hash):
-        user.password_hash = _hash_password(payload.password)
+    if not _is_bcrypt_hash(user.hashed_password):
+        user.hashed_password = _hash_password(payload.password)
         db.commit()
         db.refresh(user)
 
@@ -371,6 +546,66 @@ async def login(payload: LoginPayload, db: Session = Depends(get_db)):
             "is_temporary_admin": user.email == TEMP_ADMIN_EMAIL,
         },
     }
+
+
+# ─── Embedded BOM Catalogue (fallback when DB catalog is empty) ──────────────
+# Format: (bom_num, category, description, qty_formula, unit, spec, unit_price)
+_BOM_CATALOGUE = [
+    (1,  "BATTERY SYSTEM",          "Battery Module/Pack — Complete",        "n",        "system", "51.2V, 1020Ah, 52.25kWh",              520000),
+    (5,  "AC SIDE",                 "AC Main Circuit Breaker",               "inv",      "pcs",    "125A, 400–690VAC",                      4500),
+    (6,  "AC SIDE",                 "AC Disconnect Switch",                  "inv",      "pcs",    "125A, 400–690VAC",                      3500),
+    (7,  "AC SIDE",                 "AC Surge Protection Device",            "inv",      "pcs",    "400VAC, 40kA",                          2500),
+    (8,  "AC SIDE",                 "AC Power Meter",                        "inv",      "pcs",    "0.5S class, Modbus",                    8000),
+    (9,  "AC SIDE",                 "Current Transformers (CTs)",            "inv * 3",  "pcs",    "125/5A or 150/5A",                       600),
+    (10, "AC SIDE",                 "AC Distribution Panel",                 "1",        "pcs",    "125A main + branch circuits",           12000),
+    (11, "POWER CONVERSION SYSTEM", "Hybrid Inverter 50kW",                  "inv",      "pcs",    "50kW, 48–58V DC, 3-ph 400VAC",         180000),
+    (12, "POWER CONVERSION SYSTEM", "Inverter Communication Module",         "1",        "pcs",    "Modbus RTU/TCP, CAN",                   5000),
+    (13, "DC SIDE",                 "DC Main Circuit Breaker",               "inv",      "pcs",    "800A, 80–100VDC",                       15000),
+    (14, "DC SIDE",                 "DC Fused Disconnect",                   "inv",      "pcs",    "630–800A, 80VDC",                       8000),
+    (15, "DC SIDE",                 "DC Power Cable — Main (+)",             "inv * 19", "m",      "240mm², 1000VDC rated, red",            350),
+    (16, "DC SIDE",                 "DC Power Cable — Main (−)",             "inv * 19", "m",      "240mm², 1000VDC rated, black",          350),
+    (17, "DC SIDE",                 "DC Cable Lugs",                         "inv * 19", "pcs",    "M12 stud, 1600A rated",                  80),
+    (18, "DC SIDE",                 "DC Surge Protection Device",            "1",        "pcs",    "80VDC, 20kA",                           3000),
+    (19, "DC SIDE",                 "DC Shunt (Optional)",                   "1",        "pcs",    "1500A, 75mV, 0.5% accuracy",            2500),
+    (20, "EMS",                     "EMS Controller / Software",             "1",        "system", "Supports 50–500kWh",                       0),
+    (21, "EMS",                     "EMS Gateway / Server",                  "1",        "pcs",    "Linux/Windows, Modbus master",             0),
+    (22, "EMS",                     "HMI Touchscreen Panel",                 "1",        "pcs",    "10–12 inch, IP65 front panel",          18000),
+    (23, "EMS",                     "Network Switch",                        "1",        "pcs",    "8-port managed",                        4000),
+    (24, "EMS",                     "4G/LTE Router",                         "1",        "pcs",    "Dual SIM, VPN capable",                 8000),
+    (25, "EMS",                     "Data Logger (Optional)",                "1",        "pcs",    "Modbus RTU/TCP, SD card",               6000),
+    (26, "CONTROL WIRING",          "Modbus Cable RS485",                    "30",       "m",      "2×1.5mm² + shield, 120Ω",                45),
+    (27, "CONTROL WIRING",          "CAN Bus Cable",                         "15",       "m",      "Twisted pair, 120Ω termination",          60),
+    (28, "CONTROL WIRING",          "Ethernet Cable CAT6",                   "30",       "m",      "Outdoor rated",                          35),
+    (29, "CONTROL WIRING",          "Control Power Cable",                   "20",       "m",      "4×1.5mm², 300/500V",                     50),
+    (30, "CONTROL WIRING",          "RS485 Terminators",                     "2",        "pcs",    "120Ω, 0.25W",                            30),
+    (31, "CONTROL WIRING",          "RJ45 Connectors",                       "10",       "pcs",    "CAT6 shielded",                          25),
+    (32, "GROUNDING",               "Ground Rod",                            "2",        "pcs",    "5/8 inch × 8–10 ft",                    500),
+    (33, "GROUNDING",               "Ground Cable — Main",                   "20",       "m",      "35–70mm²",                              120),
+    (34, "GROUNDING",               "Ground Busbar",                         "1",        "pcs",    "12-hole, 600mm",                        2000),
+    (35, "GROUNDING",               "Ground Lugs",                           "12",       "pcs",    "For 35–70mm² cable",                     60),
+    (36, "GROUNDING",               "Bonding Jumpers",                       "5",        "pcs",    "35mm², 300–500mm length",               150),
+    (37, "GROUNDING",               "Lightning Arrester (Optional)",         "1",        "system", "Per local requirements",                5000),
+    (38, "AUXILIARY",               "Auxiliary Power Panel",                 "1",        "pcs",    "63A, 230VAC, 6–8 circuits",             7000),
+    (39, "AUXILIARY",               "UPS for Controls",                      "1",        "pcs",    "24VDC, 500VA, 2-hr runtime",           12000),
+    (40, "AUXILIARY",               "24VDC Power Supply",                    "1",        "pcs",    "10A, 240W",                             3500),
+    (41, "AUXILIARY",               "Control Relays",                        "5",        "pcs",    "DPDT, 10A, 24VDC coil",                  200),
+    (42, "AUXILIARY",               "Emergency Stop Button",                 "2",        "pcs",    "Twist-release, IP65",                    800),
+    (43, "AUXILIARY",               "Status Indicator Lights",               "5",        "pcs",    "Red/Yellow/Green, 24VDC",                150),
+    (44, "ENCLOSURE",               "Control Cabinet",                       "1",        "pcs",    "800×600×300mm",                         18000),
+    (45, "ENCLOSURE",               "DIN Rail",                              "3",        "m",      "Heavy duty",                             200),
+    (46, "ENCLOSURE",               "Cable Tray",                            "10",       "m",      "300mm width",                            500),
+    (47, "ENCLOSURE",               "Cable Glands",                          "15",       "pcs",    "Various sizes, IP65",                     80),
+    (48, "ENCLOSURE",               "Weatherproof Junction Box",             "2",        "pcs",    "300×300×150mm, IP65",                   1200),
+    (49, "INSTALLATION",            "Conduit — EMT/PVC",                     "20",       "m",      "25–50mm diameter",                        80),
+    (50, "INSTALLATION",            "Conduit Fittings",                      "1",        "set",    "Complete fittings kit",                 2000),
+    (51, "INSTALLATION",            "Cable Ties — Heavy Duty",               "100",      "pcs",    "300–500mm length",                         8),
+    (52, "INSTALLATION",            "Warning Labels",                        "1",        "set",    "High voltage DC/AC warnings",           1500),
+    (55, "TESTING",                 "Digital Multimeter",                    "1",        "pcs",    "CAT III 600V",                          3500),
+    (56, "TESTING",                 "Clamp Meter",                           "1",        "pcs",    "1000A range",                           5000),
+    (57, "TESTING",                 "Insulation Tester",                     "1",        "pcs",    "500–1000VDC test",                      8000),
+    (58, "TESTING",                 "Commissioning Service",                 "1",        "service","2–3 days on-site",                      35000),
+    (60, "DOCUMENTATION",           "Equipment Submittals",                  "1",        "set",    "All major equipment",                   5000),
+]
 
 
 # ─── Core Calculation Engine ─────────────────────────────────────────────────
@@ -405,27 +640,26 @@ def _eval_qty(formula_str: str, sizing_vars: dict) -> float:
 
 
 def calculate_bess(inp: BESSInputs, catalog_items=None) -> dict:
-    # --- SIZING ---
+    # ── SIZING (Sheet 1) ──────────────────────────────────────────────────────
     required_energy = inp.peak_demand_kw * inp.backup_duration_hrs
-    installed_cap_required = required_energy / (inp.dod_pct / 100)
+    dod = inp.dod_pct / 100
+    eta = inp.round_trip_efficiency_pct / 100
+    installed_cap_required = required_energy / dod
     num_modules = math.ceil(installed_cap_required / inp.battery_module_kwh)
     actual_installed_kwh = num_modules * inp.battery_module_kwh
-
-    # --- SIZING VARIABLES (available to qty_formula evaluation) ---
     num_inverters = math.ceil(inp.peak_demand_kw / 50)
     cable_length = num_inverters * 19
+
     sizing_vars = {
-        "n": num_modules,
-        "num_modules": num_modules,
-        "inv": num_inverters,
-        "num_inverters": num_inverters,
+        "n": num_modules, "num_modules": num_modules,
+        "inv": num_inverters, "num_inverters": num_inverters,
         "cable_length": cable_length,
     }
 
-    # --- BOM COST (from admin catalog or hardcoded fallback) ---
+    # ── BOM COST (DB catalog or embedded fallback) ────────────────────────────
+    bom_items = []
+    bom_equipment_total = 0
     if catalog_items and len(catalog_items) > 0:
-        bom_items = []
-        bom_equipment_total = 0
         for item in catalog_items:
             qty = _eval_qty(item.qty_formula or "1", sizing_vars)
             unit_price = float(item.unit_price or 0)
@@ -435,185 +669,162 @@ def calculate_bess(inp: BESSInputs, catalog_items=None) -> dict:
                 "id": item.id,
                 "category": item.category or "",
                 "description": item.description or "",
-                "qty": qty,
+                "qty": round(qty, 2),
                 "unit": item.unit or "pcs",
                 "spec": item.spec or "",
                 "unit_price": unit_price,
                 "line_total": round(line_total, 2),
             })
-    # else:
-    #     # Legacy hardcoded fallback when no catalog items exist
-    #     battery_unit_price = 520000
-    #     battery_total = num_modules * battery_unit_price
-    #     ac_mcb = num_inverters * 4500
-    #     ac_disconnect = num_inverters * 3500
-    #     ac_spd = num_inverters * 2500
-    #     ac_meter = num_inverters * 8000
-    #     inverter_cost = num_inverters * 180000
-    #     dc_mcb = num_inverters * 15000
-    #     dc_fuse = num_inverters * 8000
-    #     dc_cable_pos = cable_length * 350
-    #     dc_cable_neg = cable_length * 350
-    #     hmi = 18000
-    #     enclosure = 24000 * num_inverters
-    #     ups_control = 14000
+    else:
+        # Embedded 60-item catalogue from BESS_Logic_Windsurf reference
+        for (bom_num, cat, desc, qty_expr, unit, spec, unit_price) in _BOM_CATALOGUE:
+            qty = _eval_qty(qty_expr, sizing_vars)
+            line_total = qty * unit_price
+            bom_equipment_total += line_total
+            bom_items.append({
+                "id": bom_num,
+                "category": cat,
+                "description": desc,
+                "qty": round(qty, 2),
+                "unit": unit,
+                "spec": spec,
+                "unit_price": unit_price,
+                "line_total": round(line_total, 2),
+            })
 
-    #     bom_items = [
-    #         {"id": 1, "category": "Battery System", "description": "Battery Module/Pack – Complete", "qty": num_modules, "unit": "system", "spec": f"51.2V, 1020Ah, {inp.battery_module_kwh}kWh", "unit_price": battery_unit_price, "line_total": battery_total},
-    #         {"id": 5, "category": "AC Side", "description": "AC Main Circuit Breaker", "qty": num_inverters, "unit": "pcs", "spec": "125A, 400–690VAC", "unit_price": 4500, "line_total": ac_mcb},
-    #         {"id": 6, "category": "AC Side", "description": "AC Disconnect Switch", "qty": num_inverters, "unit": "pcs", "spec": "125A, 400–690VAC", "unit_price": 3500, "line_total": ac_disconnect},
-    #         {"id": 7, "category": "AC Side", "description": "AC Surge Protection Device", "qty": num_inverters, "unit": "pcs", "spec": "400VAC, 40kA", "unit_price": 2500, "line_total": ac_spd},
-    #         {"id": 8, "category": "AC Side", "description": "AC Power Meter", "qty": num_inverters, "unit": "pcs", "spec": "0.5S class, Modbus", "unit_price": 8000, "line_total": ac_meter},
-    #         {"id": 11, "category": "Inverter/PCS", "description": "Hybrid Inverter 50kW", "qty": num_inverters, "unit": "pcs", "spec": "50kW, 48–58V DC, 3-ph 400VAC", "unit_price": 180000, "line_total": inverter_cost},
-    #         {"id": 13, "category": "DC Side", "description": "DC Main Circuit Breaker", "qty": num_inverters, "unit": "pcs", "spec": "800A, 80–100VDC", "unit_price": 15000, "line_total": dc_mcb},
-    #         {"id": 14, "category": "DC Side", "description": "DC Fused Disconnect", "qty": num_inverters, "unit": "pcs", "spec": "630–800A, 80VDC", "unit_price": 8000, "line_total": dc_fuse},
-    #         {"id": 15, "category": "DC Cabling", "description": "DC Power Cable +ve", "qty": cable_length, "unit": "m", "spec": "240mm², 1000VDC, red", "unit_price": 350, "line_total": dc_cable_pos},
-    #         {"id": 16, "category": "DC Cabling", "description": "DC Power Cable -ve", "qty": cable_length, "unit": "m", "spec": "240mm², 1000VDC, black", "unit_price": 350, "line_total": dc_cable_neg},
-    #         {"id": 22, "category": "EMS", "description": "HMI Touchscreen Panel", "qty": 1, "unit": "pcs", "spec": "10–12 inch, IP65", "unit_price": 18000, "line_total": hmi},
-    #         {"id": 39, "category": "Auxiliary", "description": "UPS for Controls 24VDC 500VA", "qty": 1, "unit": "pcs", "spec": "APC BE600M1", "unit_price": 14000, "line_total": ups_control},
-    #         {"id": 44, "category": "Enclosure", "description": "Control Cabinet 800×600×300", "qty": num_inverters, "unit": "pcs", "spec": "IP66", "unit_price": 24000, "line_total": enclosure},
-    #     ]
-    #     bom_equipment_total = sum(item["line_total"] for item in bom_items)
-
-    installation_cost = bom_equipment_total * (inp.installation_pct / 100)
+    # ── CAPEX (Sheet 2) ───────────────────────────────────────────────────────
+    installation_cost  = bom_equipment_total * (inp.installation_pct / 100)
     commissioning_cost = bom_equipment_total * (inp.commissioning_pct / 100)
-    contingency_cost = (bom_equipment_total + installation_cost + commissioning_cost) * (inp.contingency_pct / 100)
+    # Contingency on BOM only (5.55% matches sheet; user input used as-is)
+    contingency_cost   = bom_equipment_total * (inp.contingency_pct / 100)
     total_capex = bom_equipment_total + installation_cost + commissioning_cost + contingency_cost
 
-    # --- OPEX ---
-    annual_om = total_capex * 0.015
-    insurance = total_capex * 0.005
-    monitoring = 10000
+    # ── OPEX (Sheet 2) ────────────────────────────────────────────────────────
+    annual_om       = total_capex * 0.015   # 1.5% of CAPEX
+    insurance       = total_capex * 0.005   # 0.5% of CAPEX
+    monitoring      = 10000                 # fixed ₹10,000/yr
     total_annual_opex = annual_om + insurance + monitoring
-    lifetime_opex = total_annual_opex * inp.project_lifetime_yrs
+    lifetime_opex     = total_annual_opex * inp.project_lifetime_yrs
 
-    # --- LCOS ---
-    annual_cycles = inp.cycles_per_day * 365
-    total_cycles = annual_cycles * inp.calendar_life_yrs
-    eta = inp.round_trip_efficiency_pct / 100
-    dod = inp.dod_pct / 100
+    # ── LCOS (Sheet 2) ────────────────────────────────────────────────────────
+    annual_cycles    = inp.cycles_per_day * 365
+    total_cycles     = annual_cycles * inp.calendar_life_yrs
     energy_throughput = actual_installed_kwh * dod * eta * total_cycles
     lcos = (total_capex + lifetime_opex) / energy_throughput if energy_throughput > 0 else 0
 
-    # --- SAVINGS ---
-    daily_dischargeable = actual_installed_kwh * dod * eta
-    arbitrage_per_kwh = inp.grid_peak_tariff - inp.grid_offpeak_tariff
-    daily_arbitrage = daily_dischargeable * arbitrage_per_kwh
-    annual_arbitrage = daily_arbitrage * 365
-    annual_md_saving = inp.monthly_md_charge_saving * 12
-    total_annual_savings = annual_arbitrage + annual_md_saving + inp.dg_displacement_saving_yr
+    # ── SAVINGS (Sheet 3) ─────────────────────────────────────────────────────
+    # daily_dischargeable uses DoD only — no RTE (Sheet 3 formula)
+    daily_dischargeable   = actual_installed_kwh * dod
+    arbitrage_per_kwh     = inp.grid_peak_tariff - inp.grid_offpeak_tariff
+    daily_arbitrage       = daily_dischargeable * arbitrage_per_kwh
+    annual_arbitrage      = daily_arbitrage * 365
+    annual_md_saving      = inp.monthly_md_charge_saving * 12
+    total_annual_savings  = annual_arbitrage + annual_md_saving + inp.dg_displacement_saving_yr
 
-    # --- ROI ---
-    net_annual_benefit = total_annual_savings - total_annual_opex
-    simple_payback = total_capex / net_annual_benefit if net_annual_benefit > 0 else 999
-    cumulative_10yr = sum([net_annual_benefit * y for y in range(1, 11)])
-    roi_10yr = ((cumulative_10yr) / total_capex) * 100 if total_capex > 0 else 0
+    # ── ROI (Sheet 3) ─────────────────────────────────────────────────────────
+    net_annual_benefit  = total_annual_savings - total_annual_opex
+    simple_payback      = total_capex / net_annual_benefit if net_annual_benefit > 0 else 999
+    cumulative_10yr_net = net_annual_benefit * min(10, int(inp.project_lifetime_yrs)) - total_capex
+    roi_10yr            = ((cumulative_10yr_net + total_capex) / total_capex) * 100 if total_capex > 0 else 0
+    annual_roi_pct      = (net_annual_benefit / total_capex) * 100 if total_capex > 0 else 0
 
-    # --- YEAR-BY-YEAR CASHFLOW ---
+    # ── YEAR-BY-YEAR CASHFLOW (Sheet 4 degradation model) ────────────────────
     cashflow_years = []
     cumulative = -total_capex
     for yr in range(1, int(inp.project_lifetime_yrs) + 1):
-        soh = max(0, 1 - (inp.annual_degradation_pct / 100) * (yr - 1))
-        usable_cap = actual_installed_kwh * soh
-        tariff_factor = (1 + inp.tariff_escalation_pct / 100) ** (yr - 1)
-        degraded_arbitrage = usable_cap * dod * eta * arbitrage_per_kwh * tariff_factor * 365
-        md_factor = (1 + inp.md_escalation_pct / 100) ** (yr - 1)
-        md_saving_yr = annual_md_saving * md_factor
-        dg_factor = (1 + inp.dg_fuel_escalation_pct / 100) ** (yr - 1)
-        dg_saving_yr = inp.dg_displacement_saving_yr * dg_factor
-        total_saving_yr = degraded_arbitrage + md_saving_yr + dg_saving_yr
-        net_yr = total_saving_yr - total_annual_opex
-        cumulative += net_yr
+        # Exponential SOH decay: Yr1 = (1-r)^1
+        soh_pct       = 100.0 * ((1 - inp.annual_degradation_pct / 100) ** yr)
+        usable_cap    = actual_installed_kwh * (soh_pct / 100)
+        # Escalated peak tariff, spread against fixed off-peak
+        esc_peak      = inp.grid_peak_tariff * ((1 + inp.tariff_escalation_pct / 100) ** (yr - 1))
+        esc_spread    = esc_peak - inp.grid_offpeak_tariff
+        degraded_arb  = usable_cap * dod * esc_spread * 365
+        md_saving_yr  = annual_md_saving * ((1 + inp.md_escalation_pct / 100) ** (yr - 1))
+        dg_saving_yr  = inp.dg_displacement_saving_yr * ((1 + inp.dg_fuel_escalation_pct / 100) ** (yr - 1))
+        total_saving_yr = degraded_arb + md_saving_yr + dg_saving_yr
+        net_yr          = total_saving_yr - total_annual_opex
+        cumulative     += net_yr
         cashflow_years.append({
             "year": yr,
-            "soh_pct": round(soh * 100, 1),
+            "soh_pct": round(soh_pct, 1),
             "usable_capacity_kwh": round(usable_cap, 0),
-            "arbitrage_saving": round(degraded_arbitrage, 0),
+            "arbitrage_saving": round(degraded_arb, 0),
             "md_dg_saving": round(md_saving_yr + dg_saving_yr, 0),
             "total_saving": round(total_saving_yr, 0),
             "net_benefit": round(net_yr, 0),
             "cumulative_net": round(cumulative, 0),
         })
 
-    # --- SOLAR ---
-    solar_annual_gen = inp.solar_pv_kwp * (inp.solar_cuf_pct / 100) * 8760
-    solar_capex = inp.solar_pv_kwp * inp.solar_capex_per_kwp
-    solar_annual_om = inp.solar_pv_kwp * inp.solar_om_per_kwp_yr
+    # ── OPTIMALITY CHECK (Sheet 4 — 8 criteria) ───────────────────────────────
+    capex_per_kwh = total_capex / actual_installed_kwh if actual_installed_kwh > 0 else 0
+    optimality_criteria = [
+        {"id": 1, "name": "LCOS vs Grid Peak Tariff",  "value": round(lcos, 4),          "benchmark": f"< ₹{inp.grid_peak_tariff}/kWh",  "pass": lcos < inp.grid_peak_tariff,         "display": f"₹{lcos:.2f}/kWh"},
+        {"id": 2, "name": "Simple Payback Period",     "value": round(simple_payback, 1), "benchmark": "< 5 yrs (warn < 8)",              "pass": simple_payback < 5,  "warn": simple_payback < 8, "display": f"{simple_payback:.1f} yrs"},
+        {"id": 3, "name": "10-Yr Net Return",          "value": round(cumulative_10yr_net, 0), "benchmark": "Positive",                   "pass": cumulative_10yr_net > 0,             "display": f"₹{cumulative_10yr_net:,.0f}"},
+        {"id": 4, "name": "Annual ROI on CAPEX",       "value": round(annual_roi_pct, 1), "benchmark": "≥ 15% pa",                        "pass": annual_roi_pct >= 15,                "display": f"{annual_roi_pct:.1f}%"},
+        {"id": 5, "name": "CAPEX per kWh vs Market",   "value": round(capex_per_kwh, 0),  "benchmark": "₹10,000–₹18,000/kWh",             "pass": 10000 <= capex_per_kwh <= 18000,     "display": f"₹{capex_per_kwh:,.0f}/kWh"},
+        {"id": 6, "name": "DoD within LFP safe range", "value": inp.dod_pct,              "benchmark": "80%–95%",                         "pass": 80 <= inp.dod_pct <= 95,             "display": f"{inp.dod_pct:.1f}%"},
+        {"id": 7, "name": "Module Sizing",             "value": num_modules,              "benchmark": "≥ 1 module",                      "pass": num_modules >= 1,                    "display": str(num_modules)},
+        {"id": 8, "name": "BOM Completeness",          "value": round(bom_equipment_total, 0), "benchmark": "All items priced",           "pass": bom_equipment_total > 0,             "display": f"₹{bom_equipment_total:,.0f}"},
+    ]
+    passed_count = sum(1 for c in optimality_criteria if c.get("pass"))
+    optimality_verdict = "OPTIMAL" if passed_count >= 6 else "REVIEW" if passed_count >= 4 else "NOT VIABLE"
+
+    # ── SOLAR ─────────────────────────────────────────────────────────────────
+    solar_annual_gen   = inp.solar_pv_kwp * (inp.solar_cuf_pct / 100) * 8760
+    solar_capex        = inp.solar_pv_kwp * inp.solar_capex_per_kwp
+    solar_annual_om    = inp.solar_pv_kwp * inp.solar_om_per_kwp_yr
     solar_lifetime_cost = solar_capex + solar_annual_om * inp.calendar_life_yrs
-    solar_throughput = solar_annual_gen * inp.calendar_life_yrs * (1 - inp.solar_degradation_pct_yr / 100 * 5)
+    solar_throughput   = solar_annual_gen * inp.calendar_life_yrs * (1 - inp.solar_degradation_pct_yr / 100 * 5)
     lcos_solar = solar_lifetime_cost / solar_throughput if solar_throughput > 0 else 0
 
-    # --- DG ---
+    # ── DG ────────────────────────────────────────────────────────────────────
     dg_annual_cost = inp.dg_fuel_cost_yr + inp.dg_om_yr
-    dg_lifetime = inp.dg_capex + dg_annual_cost * inp.calendar_life_yrs
-    dg_gen_kwh_yr = inp.dg_capacity_kw * 8 * 365  # assume 8 hrs/day
-    dg_throughput = dg_gen_kwh_yr * inp.calendar_life_yrs
+    dg_lifetime    = inp.dg_capex + dg_annual_cost * inp.calendar_life_yrs
+    dg_gen_kwh_yr  = inp.dg_capacity_kw * 8 * 365
+    dg_throughput  = dg_gen_kwh_yr * inp.calendar_life_yrs
     lcos_dg = dg_lifetime / dg_throughput if dg_throughput > 0 else 0
 
-    # Combined BESS+Solar
-    combined_capex = total_capex + solar_capex
-    combined_opex_yr = total_annual_opex + solar_annual_om
-    combined_lifetime = combined_capex + combined_opex_yr * inp.calendar_life_yrs
+    # ── BESS + Solar ─────────────────────────────────────────────────────────
+    combined_capex      = total_capex + solar_capex
+    combined_opex_yr    = total_annual_opex + solar_annual_om
+    combined_lifetime   = combined_capex + combined_opex_yr * inp.calendar_life_yrs
     combined_throughput = energy_throughput + solar_throughput
     lcos_bess_solar = combined_lifetime / combined_throughput if combined_throughput > 0 else 0
 
-    # --- SENSITIVITY TABLE ---
+    # ── SENSITIVITY (Sheet 5) ─────────────────────────────────────────────────
     bom_multipliers = [0.80, 0.90, 1.00, 1.10, 1.20, 1.30]
     tariffs = [8, 10, 12, 14, 16, 18]
     sensitivity = []
     for t in tariffs:
         row = {"tariff": t, "paybacks": {}}
         for m in bom_multipliers:
-            scaled_capex = bom_equipment_total * m + installation_cost * m + commissioning_cost * m + contingency_cost * m
+            scaled_capex = total_capex * m
             arb = daily_dischargeable * (t - inp.grid_offpeak_tariff) * 365
             net = arb + annual_md_saving + inp.dg_displacement_saving_yr - total_annual_opex
             pb = round(scaled_capex / net, 1) if net > 0 else 99
             row["paybacks"][str(m)] = pb
         sensitivity.append(row)
 
-    # --- LCOS MATRIX (DoD x Cycle Life) ---
-    dods = [70, 80, 85, 90, 95]
+    # ── LCOS MATRIX (Sheet 5 Table 2) ────────────────────────────────────────
+    dods_pct    = [70, 80, 85, 90, 95]
     cycle_lives = [2000, 3000, 4000, 5000, 6000]
+    total_lifetime_cost = total_capex + lifetime_opex
     lcos_matrix = []
     for cl in cycle_lives:
         row = {"cycle_life": cl, "values": {}}
-        for d in dods:
-            d_frac = d / 100
-            e_thru = actual_installed_kwh * d_frac * eta * cl * inp.cycles_per_day
-            lcos_val = (total_capex + lifetime_opex) / e_thru if e_thru > 0 else 0
+        for d in dods_pct:
+            throughput = actual_installed_kwh * (d / 100) * eta * cl
+            lcos_val   = total_lifetime_cost / throughput if throughput > 0 else 0
             row["values"][str(d)] = round(lcos_val, 2)
         lcos_matrix.append(row)
 
-    # --- COMPARISON ---
+    # ── COMPARISON ────────────────────────────────────────────────────────────
     comparison = {
-        "BESS Only": {
-            "lcos": round(lcos, 2),
-            "npv_lcos": round(lcos * 0.82, 2),
-            "lifetime_cost": round(total_capex + lifetime_opex, 0),
-            "energy_throughput_kwh": round(energy_throughput, 0),
-            "lcos_saving_vs_grid": round(inp.grid_peak_tariff - lcos, 2),
-        },
-        "Solar Only": {
-            "lcos": round(lcos_solar, 2),
-            "npv_lcos": round(lcos_solar * 0.82, 2),
-            "lifetime_cost": round(solar_lifetime_cost, 0),
-            "energy_throughput_kwh": round(solar_throughput, 0),
-            "lcos_saving_vs_grid": round(inp.grid_peak_tariff - lcos_solar, 2),
-        },
-        "DG Only": {
-            "lcos": round(lcos_dg, 2),
-            "npv_lcos": round(lcos_dg * 0.82, 2),
-            "lifetime_cost": round(dg_lifetime, 0),
-            "energy_throughput_kwh": round(dg_throughput, 0),
-            "lcos_saving_vs_grid": round(inp.grid_peak_tariff - lcos_dg, 2),
-        },
-        "BESS + Solar": {
-            "lcos": round(lcos_bess_solar, 2),
-            "npv_lcos": round(lcos_bess_solar * 0.82, 2),
-            "lifetime_cost": round(combined_lifetime, 0),
-            "energy_throughput_kwh": round(combined_throughput, 0),
-            "lcos_saving_vs_grid": round(inp.grid_peak_tariff - lcos_bess_solar, 2),
-        },
+        "BESS Only":   {"lcos": round(lcos, 2),           "npv_lcos": round(lcos * 0.82, 2),           "lifetime_cost": round(total_capex + lifetime_opex, 0),  "energy_throughput_kwh": round(energy_throughput, 0),  "lcos_saving_vs_grid": round(inp.grid_peak_tariff - lcos, 2)},
+        "Solar Only":  {"lcos": round(lcos_solar, 2),     "npv_lcos": round(lcos_solar * 0.82, 2),     "lifetime_cost": round(solar_lifetime_cost, 0),          "energy_throughput_kwh": round(solar_throughput, 0),   "lcos_saving_vs_grid": round(inp.grid_peak_tariff - lcos_solar, 2)},
+        "DG Only":     {"lcos": round(lcos_dg, 2),        "npv_lcos": round(lcos_dg * 0.82, 2),        "lifetime_cost": round(dg_lifetime, 0),                  "energy_throughput_kwh": round(dg_throughput, 0),      "lcos_saving_vs_grid": round(inp.grid_peak_tariff - lcos_dg, 2)},
+        "BESS + Solar":{"lcos": round(lcos_bess_solar, 2),"npv_lcos": round(lcos_bess_solar * 0.82, 2),"lifetime_cost": round(combined_lifetime, 0),            "energy_throughput_kwh": round(combined_throughput, 0),"lcos_saving_vs_grid": round(inp.grid_peak_tariff - lcos_bess_solar, 2)},
     }
 
     return {
@@ -623,6 +834,7 @@ def calculate_bess(inp: BESSInputs, catalog_items=None) -> dict:
             "num_modules": num_modules,
             "actual_installed_kwh": round(actual_installed_kwh, 2),
             "num_inverters": num_inverters,
+            "daily_dischargeable_kwh": round(daily_dischargeable, 2),
         },
         "capex": {
             "bom_equipment_total": round(bom_equipment_total, 0),
@@ -646,7 +858,7 @@ def calculate_bess(inp: BESSInputs, catalog_items=None) -> dict:
             "lcos_inr_per_kwh": round(lcos, 4),
         },
         "savings": {
-            "daily_dischargeable_kwh": round(daily_dischargeable, 1),
+            "daily_dischargeable_kwh": round(daily_dischargeable, 2),
             "arbitrage_per_kwh": arbitrage_per_kwh,
             "daily_arbitrage": round(daily_arbitrage, 2),
             "annual_arbitrage": round(annual_arbitrage, 2),
@@ -658,8 +870,15 @@ def calculate_bess(inp: BESSInputs, catalog_items=None) -> dict:
         "roi": {
             "net_annual_benefit": round(net_annual_benefit, 2),
             "simple_payback_yrs": round(simple_payback, 1),
-            "cumulative_10yr_net": round(cumulative_10yr, 0),
+            "cumulative_10yr_net": round(cumulative_10yr_net, 0),
             "roi_10yr_pct": round(roi_10yr, 1),
+            "annual_roi_pct": round(annual_roi_pct, 1),
+        },
+        "optimality": {
+            "criteria": optimality_criteria,
+            "passed": passed_count,
+            "total": 8,
+            "verdict": optimality_verdict,
         },
         "cashflow_years": cashflow_years,
         "sensitivity": sensitivity,
@@ -730,19 +949,33 @@ async def get_bom(calc_id: int, db: Session = Depends(get_db), current_user=Depe
 
 @app.get("/api/suppliers")
 async def list_suppliers(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    from sqlalchemy import or_
     q = db.query(models.Supplier)
     if current_user.role != "admin":
-        q = q.filter(models.Supplier.user_id == current_user.id)
+        # Show global suppliers (user_id IS NULL) and user's own suppliers
+        q = q.filter(
+            or_(models.Supplier.user_id == None, models.Supplier.user_id == current_user.id)
+        )
     suppliers = q.order_by(models.Supplier.weighted_score.desc().nullslast(), models.Supplier.id.desc()).all()
+    def _s10(v):
+        """Return score scaled to 0-100 (scores stored as 0-10)."""
+        return round(v * 10, 1) if v is not None else None
+
     return [
         {
             "id": s.id,
             "name": s.name,
             "component_category": s.component_category,
-            "price_score": s.price_score,
-            "technical_score": s.technical_score,
-            "delivery_score": s.delivery_score,
-            "weighted_score": s.weighted_score,
+            "country": getattr(s, "country", None),
+            "tier": getattr(s, "tier", None),
+            "certifications": getattr(s, "certifications", None),
+            "price_score": _s10(s.price_score),
+            "technical_score": _s10(s.technical_score),
+            "delivery_score": _s10(s.delivery_score),
+            "warranty_score": _s10(getattr(s, "warranty_score", None)),
+            "support_score": _s10(getattr(s, "support_score", None)),
+            "certification_score": _s10(getattr(s, "certification_score", None)),
+            "weighted_score": _s10(s.weighted_score),
         }
         for s in suppliers
     ]
@@ -750,52 +983,63 @@ async def list_suppliers(db: Session = Depends(get_db), current_user=Depends(get
 
 # ─── Permutation & Combination Engine ────────────────────────────────────────
 
-MODULE_SIZES = [25, 50, 52.25, 100, 150]  # kWh options
-INVERTER_SIZES = [25, 50, 100, 150]  # kW options
+MODULE_SIZES = [25, 50, 52.25, 100, 150]          # kWh per module
+INVERTER_SIZES = [25, 50, 100, 150, 200, 250, 500]  # kW per inverter unit
 
 def generate_configurations(inp: BESSInputs) -> List[dict]:
-    """Generate ranked kW × kWh × module combos"""
+    """Generate ranked kW × kWh × module combos.
+
+    Multiple inverters can be paralleled, so we only skip a size when it would
+    require an unreasonably large stack (> 20 units) or produces zero power.
+    """
     configs = []
     required_energy = inp.peak_demand_kw * inp.backup_duration_hrs
-    
+    installed_cap_required = required_energy / (inp.dod_pct / 100)
+
+    seen = set()  # deduplicate (num_modules, module_kwh, num_inverters, inv_kw)
+
     for module_kwh in MODULE_SIZES:
+        num_modules = math.ceil(installed_cap_required / module_kwh)
+        actual_kwh = num_modules * module_kwh
+
         for inv_kw in INVERTER_SIZES:
-            # Skip invalid combos
-            if inv_kw < inp.peak_demand_kw * 0.5:
-                continue
-                
-            installed_cap_required = required_energy / (inp.dod_pct / 100)
-            num_modules = math.ceil(installed_cap_required / module_kwh)
-            actual_kwh = num_modules * module_kwh
             num_inverters = math.ceil(inp.peak_demand_kw / inv_kw)
-            
-            # Calculate scores
+
+            # Skip combos that need more than 20 inverter units (impractical)
+            if num_inverters > 20:
+                continue
+
+            key = (num_modules, module_kwh, num_inverters, inv_kw)
+            if key in seen:
+                continue
+            seen.add(key)
+
             efficiency_score = min(100, (actual_kwh / installed_cap_required) * 100)
-            cost_score = 100 - ((num_modules * 500000 + num_inverters * 180000) / 100000)
-            
-            # Weighted overall score
+            # Cost score: lower inverter+module cost → higher score; clamp to 0-100
+            raw_cost = (num_modules * 500_000 + num_inverters * 180_000) / 100_000
+            cost_score = max(0, 100 - raw_cost)
+
             overall_score = efficiency_score * 0.6 + cost_score * 0.4
-            
+
             configs.append({
                 "num_modules": num_modules,
                 "module_kwh": module_kwh,
-                "total_kwh": actual_kwh,
+                "total_kwh": round(actual_kwh, 2),
                 "num_inverters": num_inverters,
                 "inverter_kw": inv_kw,
-                "total_kw": num_inverters * inv_kw,
+                "total_kw": round(num_inverters * inv_kw, 2),
                 "efficiency_score": round(efficiency_score, 1),
                 "cost_score": round(cost_score, 1),
-                "overall_score": round(overall_score, 1)
+                "overall_score": round(overall_score, 1),
             })
-    
-    # Sort by overall score descending
+
+    # Sort best first
     configs.sort(key=lambda x: x["overall_score"], reverse=True)
-    
-    # Assign ranks and mark recommended
+
     for i, c in enumerate(configs):
         c["rank"] = i + 1
         c["is_recommended"] = (i == 0)
-    
+
     return configs
 
 
@@ -931,7 +1175,38 @@ async def get_project_configs(project_id: int, db: Session = Depends(get_db), cu
     configs = db.query(models.Configuration).filter(
         models.Configuration.project_id == project_id
     ).order_by(models.Configuration.rank).all()
-    
+
+    # Auto-generate configurations if none exist yet
+    if not configs:
+        inp = BESSInputs(
+            peak_demand_kw=getattr(project, "peak_demand_kw", None) or 400.0,
+            daily_energy_kwh=getattr(project, "daily_energy_kwh", None) or 350.0,
+            backup_duration_hrs=getattr(project, "backup_duration_hrs", None) or 2.0,
+            dod_pct=getattr(project, "dod_pct", None) or 85.0,
+            battery_module_kwh=getattr(project, "battery_module_kwh", None) or 52.25,
+        )
+        generated = generate_configurations(inp)
+        for cfg in generated:
+            config = models.Configuration(
+                project_id=project_id,
+                num_modules=cfg["num_modules"],
+                module_kwh=cfg["module_kwh"],
+                total_kwh=cfg["total_kwh"],
+                num_inverters=cfg["num_inverters"],
+                inverter_kw=cfg["inverter_kw"],
+                total_kw=cfg.get("total_kw"),
+                efficiency_score=cfg["efficiency_score"],
+                cost_score=cfg["cost_score"],
+                overall_score=cfg["overall_score"],
+                is_recommended=cfg["is_recommended"],
+                rank=cfg["rank"]
+            )
+            db.add(config)
+        db.commit()
+        configs = db.query(models.Configuration).filter(
+            models.Configuration.project_id == project_id
+        ).order_by(models.Configuration.rank).all()
+
     return [{
         "id": c.id,
         "num_modules": c.num_modules,
@@ -939,6 +1214,7 @@ async def get_project_configs(project_id: int, db: Session = Depends(get_db), cu
         "total_kwh": c.total_kwh,
         "num_inverters": c.num_inverters,
         "inverter_kw": c.inverter_kw,
+        "total_kw": getattr(c, "total_kw", None),
         "efficiency_score": c.efficiency_score,
         "cost_score": c.cost_score,
         "overall_score": c.overall_score,

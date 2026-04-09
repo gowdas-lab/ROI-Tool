@@ -1,20 +1,23 @@
 """
-Admin API endpoints for BOM and Supplier management
+Admin API endpoints for BOM, Supplier, and User management
 """
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from database import get_db
-from models import ComponentCatalog, Supplier
+from models import ComponentCatalog, Supplier, User
 from pydantic import BaseModel
 from datetime import datetime
+from app.api.v1.auth import get_current_user_modular
 
 router = APIRouter(tags=["admin"])
 
 
-def require_admin(x_user_role: str | None = Header(default=None, alias="X-User-Role")):
-    if x_user_role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+def require_admin(current_user: User = Depends(get_current_user_modular)):
+    # Allow both user and admin roles to access all features
+    if current_user.role not in ["admin", "user"]:
+        raise HTTPException(status_code=403, detail="Admin or user access required")
+    return current_user
 
 # ─── BOM (Component Catalog) Schemas ─────────────────────────────────────────
 
@@ -72,8 +75,8 @@ class SupplierResponse(SupplierCreate):
 # ─── BOM CRUD Endpoints ─────────────────────────────────────────────────────
 
 @router.get("/bom", response_model=List[ComponentCatalogResponse])
-def get_all_bom_items(db: Session = Depends(get_db)):
-    """Get all BOM items from component catalog — readable by all users"""
+def get_all_bom_items(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_modular)):
+    """Get all BOM items from component catalog — requires authentication"""
     return db.query(ComponentCatalog).all()
 
 @router.post("/bom", response_model=ComponentCatalogResponse)
@@ -168,3 +171,67 @@ def bulk_import_suppliers(suppliers: List[SupplierCreate], db: Session = Depends
     db.add_all(db_suppliers)
     db.commit()
     return {"message": f"Imported {len(db_suppliers)} suppliers"}
+
+
+# ─── Admin Panel: User & Admin Account Management ───────────────────────────
+
+class AdminCreatePayload(BaseModel):
+    email: str
+    password: str
+
+
+@router.get("/panel")
+def get_admin_panel(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_modular)):
+    """List all admin and user accounts — admin only"""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    all_users = db.query(User).order_by(User.created_at.desc()).all()
+
+    def _fmt(u):
+        return {
+            "id": u.id,
+            "email": u.email,
+            "username": getattr(u, "username", None),
+            "is_active": getattr(u, "is_active", True),
+            "created_at": u.created_at.isoformat() if getattr(u, "created_at", None) else None,
+        }
+
+    return {
+        "admins": [_fmt(u) for u in all_users if u.role == "admin"],
+        "users":  [_fmt(u) for u in all_users if u.role != "admin"],
+    }
+
+
+@router.post("/panel")
+def create_admin_account(payload: AdminCreatePayload, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_modular)):
+    """Create a new admin account — admin only"""
+    import bcrypt, hashlib
+
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    email = payload.email.strip().lower()
+    if not email or not payload.password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+
+    existing = db.query(User).filter(User.email == email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    pw = payload.password
+    if len(pw.encode("utf-8")) > 72:
+        pw = hashlib.sha256(pw.encode("utf-8")).hexdigest()
+    hashed = bcrypt.hashpw(pw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+    user = User(
+        email=email,
+        username=email.split("@")[0],
+        hashed_password=hashed,
+        role="admin",
+        is_admin=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return {"id": user.id, "email": user.email, "created_by": current_user.email}

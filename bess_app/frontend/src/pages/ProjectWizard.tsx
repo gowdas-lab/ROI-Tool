@@ -54,7 +54,7 @@ const numericDefaults: Record<string, number> = {
   dg_om_yr: 0,
 };
 
-const API_BASE = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL || "http://localhost:8000";
+const API_BASE = "";
 
 type ProjectWizardProps = {
   authToken?: string | null;

@@ -1,0 +1,3 @@
+psql postgres
+CREATE DATABASE bess_db;
+\q

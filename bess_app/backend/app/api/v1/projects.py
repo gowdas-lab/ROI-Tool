@@ -6,16 +6,18 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from database import get_db
-from models import Project
+from models import Project, User
 from schemas import ProjectCreate, ProjectResponse
+from app.api.v1.auth import get_current_user_modular
 
 router = APIRouter()
 
 
 @router.post("/", response_model=ProjectResponse)
-def create_project(data: ProjectCreate, db: Session = Depends(get_db)):
+def create_project(data: ProjectCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_modular)):
     """Create a new project"""
     project = Project(
+        user_id=current_user.id,
         name=data.name,
         use_case=data.use_case,
         peak_demand_kw=data.peak_demand_kw,
@@ -28,7 +30,7 @@ def create_project(data: ProjectCreate, db: Session = Depends(get_db)):
         project_lifetime_yrs=data.project_lifetime_yrs,
         dod_pct=data.dod_pct,
         battery_module_kwh=data.battery_module_kwh,
-        cycle_life=data.cycle_life,
+        cycle_life=int(data.cycle_life),
         round_trip_efficiency_pct=data.round_trip_efficiency_pct,
         solar_pv_kwp=data.solar_pv_kwp,
         solar_cuf_pct=data.solar_cuf_pct,
@@ -41,15 +43,20 @@ def create_project(data: ProjectCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/", response_model=List[ProjectResponse])
-def list_projects(db: Session = Depends(get_db)):
-    """List all projects"""
-    return db.query(Project).order_by(Project.created_at.desc()).all()
+def list_projects(db: Session = Depends(get_db), current_user: User = Depends(get_current_user_modular)):
+    """List projects belonging to the current user (admin sees all)"""
+    q = db.query(Project)
+    if current_user.role != "admin":
+        q = q.filter(Project.user_id == current_user.id)
+    return q.order_by(Project.created_at.desc()).all()
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
-def get_project(project_id: int, db: Session = Depends(get_db)):
+def get_project(project_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_modular)):
     """Get project by ID"""
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+    if current_user.role != "admin" and project.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed")
     return project

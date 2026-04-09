@@ -1,8 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-
 interface User {
   id: number;
   email: string;
@@ -10,6 +8,8 @@ interface User {
   full_name: string | null;
   is_active: boolean;
   is_admin: boolean;
+  role?: string;
+  token?: string;
 }
 
 interface AuthState {
@@ -35,7 +35,7 @@ export const useAuthStore = create<AuthState>()(
       login: async (email: string, password: string) => {
         set({ isLoading: true, error: null });
         try {
-          const res = await fetch(`${API_BASE}/api/auth/login`, {
+          const res = await fetch(`/api/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, password }),
@@ -48,7 +48,7 @@ export const useAuthStore = create<AuthState>()(
 
           const data = await res.json();
           set({ 
-            user: data.user, 
+            user: { ...data.user, token: data.access_token }, 
             isAuthenticated: true, 
             isLoading: false 
           });
@@ -62,7 +62,7 @@ export const useAuthStore = create<AuthState>()(
       signup: async (data) => {
         set({ isLoading: true, error: null });
         try {
-          const res = await fetch(`${API_BASE}/api/auth/signup`, {
+          const res = await fetch(`/api/auth/signup`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data),
@@ -73,9 +73,9 @@ export const useAuthStore = create<AuthState>()(
             throw new Error(err.detail || 'Signup failed');
           }
 
-          const user = await res.json();
+          const responseData = await res.json();
           set({ 
-            user, 
+            user: { ...responseData.user, token: responseData.access_token }, 
             isAuthenticated: true, 
             isLoading: false 
           });
@@ -94,6 +94,10 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'bess-auth',
+      partialize: (state) => ({
+        user: state.user,
+        isAuthenticated: state.isAuthenticated,
+      }),
     }
   )
 );

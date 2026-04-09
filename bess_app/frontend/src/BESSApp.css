@@ -1,3 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 /* BESS Optimality App Styles */
 
 :root {
@@ -149,6 +153,8 @@ body {
   padding: 0.75rem 1rem;
   text-align: center;
   font-size: 0.875rem;
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
 }
 
 /* Inputs Tab */
@@ -760,9 +766,33 @@ select.inp {
 .role-badge,
 .user-badge {
   font-size: 0.75rem;
-  padding: 0.2rem 0.6rem;
+  font-weight: 600;
+  padding: 0.2rem 0.75rem;
   border-radius: 999px;
   background: var(--bg-card);
+  border: 1px solid var(--border);
+}
+
+.role-badge-admin {
+  background: linear-gradient(135deg, #b45309, #d97706);
+  color: #fff;
+  border: none;
+}
+
+.role-badge-user {
+  background: linear-gradient(135deg, #0369a1, #0ea5e9);
+  color: #fff;
+  border: none;
+}
+
+.success-bar {
+  background: #15803d;
+  color: white;
+  padding: 0.6rem 1rem;
+  text-align: center;
+  font-size: 0.875rem;
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
 }
 
 .logout-btn {

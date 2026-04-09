@@ -5,7 +5,7 @@ LCOS, ROI, NPV, sensitivity
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
-from models import FinancialResult, CashflowYear, Configuration, Project
+from models import FinancialResult, CashflowYear, Configuration, Project, User
 from core import (
     calculate_capex,
     calculate_opex,
@@ -15,12 +15,13 @@ from core import (
     generate_cashflow,
     run_sensitivity_analysis,
 )
+from app.api.v1.auth import get_current_user_modular
 
 router = APIRouter()
 
 
 @router.post("/calculate/{configuration_id}")
-def calculate_financials(configuration_id: int, db: Session = Depends(get_db)):
+def calculate_financials(configuration_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_modular)):
     """Calculate financial metrics for a configuration"""
     config = db.query(Configuration).filter(Configuration.id == configuration_id).first()
     if not config:

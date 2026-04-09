@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import "./BESSApp.css";
 import { ProjectWizard } from "./pages";
 import { useAuthStore } from "./store/authStore";
+import { useNavigate } from "react-router-dom";
 
-const API_BASE = (import.meta.env.VITE_API_URL || "http://localhost:8000").replace(/\/$/, "");
+const API_BASE = "";
 
 const fmt = (n, decimals = 0) =>
   n == null ? "—" : Number(n).toLocaleString("en-IN", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
@@ -11,7 +12,8 @@ const fmt = (n, decimals = 0) =>
 const fmtCur = (n) => n == null ? "—" : `₹${fmt(n)}`;
 const fmtLakh = (n) => n == null ? "—" : `₹${fmt(n / 100000, 2)}L`;
 
-const BASE_TABS = ["Project Wizard", "Configurations", "Supplier Engine", "BOM Viewer", "Analytics", "History"];
+const USER_TABS  = ["Project Wizard", "Configurations", "Supplier Engine", "BOM Viewer", "Analytics", "History"];
+const ADMIN_TABS = ["Project Wizard", "Configurations", "Supplier Engine", "BOM Viewer", "Analytics", "History", "Admin Panel"];
 
 const defaultInputs = {
   peak_demand_kw: 400,
@@ -626,121 +628,280 @@ function ConfigurationsTab({ projectId, authHeaders, onProjectResolved, onUnauth
   );
 }
 
-// ── Tab: Supplier Engine (Selection + Scoring) ───────────────────────────────
-function SupplierEngineTab({ authHeaders, onUnauthorized }) {
+const BLANK_SUPPLIER = {
+  name: "", component_category: "", country: "", tier: "Tier 1",
+  price_score: "", technical_score: "", delivery_score: "",
+  warranty_score: "", support_score: "", certification_score: "",
+};
+
+// ── Tab: Supplier Engine ──────────────────────────────────────────────────────
+function SupplierEngineTab({ isAdmin, authHeaders, onUnauthorized }) {
   const [suppliers, setSuppliers] = useState([]);
   const [weights, setWeights] = useState({ price: 30, technical: 25, delivery: 15, warranty: 10, support: 10, cert: 10 });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [successMsg, setSuccessMsg] = useState("");
+
+  // Admin edit state
+  const [showForm, setShowForm] = useState(false);
+  const [draft, setDraft] = useState(BLANK_SUPPLIER);
+  const [editingId, setEditingId] = useState(null);
+  const [catFilter, setCatFilter] = useState("All");
+
+  const loadData = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [suppliersRes, weightsRes] = await Promise.all([
+        fetch(`${API_BASE}/api/suppliers`, { headers: authHeaders() }),
+        fetch(`${API_BASE}/api/scoring-weights`, { headers: authHeaders() }),
+      ]);
+      if (suppliersRes.status === 401 || weightsRes.status === 401) {
+        onUnauthorized?.();
+        return;
+      }
+      if (!suppliersRes.ok) throw new Error("Failed to load suppliers");
+      const suppliersData = await suppliersRes.json();
+      const weightsData = weightsRes.ok ? await weightsRes.json() : {};
+      setSuppliers(Array.isArray(suppliersData) ? suppliersData : []);
+      setWeights(prev => ({ ...prev, ...(weightsData?.weights || {}) }));
+    } catch (e) {
+      setError(e.message || "Failed to load supplier data");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    let cancelled = false;
+    loadData();
+  }, []);
 
-    const load = async () => {
-      setLoading(true);
-      setError("");
-      try {
-        const [suppliersRes, weightsRes] = await Promise.all([
-          fetch(`${API_BASE}/api/suppliers`, { headers: authHeaders() }),
-          fetch(`${API_BASE}/api/scoring-weights`, { headers: authHeaders() }),
-        ]);
-
-        if (suppliersRes.status === 401 || weightsRes.status === 401) {
-          if (!cancelled) {
-            setError("Session expired. Please login again.");
-            onUnauthorized?.();
-          }
-          return;
-        }
-
-        if (!suppliersRes.ok || !weightsRes.ok) {
-          throw new Error("Failed to load supplier engine data");
-        }
-
-        const suppliersData = await suppliersRes.json();
-        const weightsData = await weightsRes.json();
-
-        if (!cancelled) {
-          setSuppliers(Array.isArray(suppliersData) ? suppliersData : []);
-          setWeights((prev) => ({ ...prev, ...(weightsData?.weights || {}) }));
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setError(e.message || "Failed to load supplier engine");
-          setSuppliers([]);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [authHeaders, onUnauthorized]);
+  const flash = (msg) => { setSuccessMsg(msg); setTimeout(() => setSuccessMsg(""), 3000); };
 
   const handleSaveWeights = async () => {
     await fetch(`${API_BASE}/api/scoring-weights`, {
       method: "POST",
       headers: { ...authHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify({ weights })
+      body: JSON.stringify({ weights }),
     });
+    flash("Weights saved.");
   };
 
-  if (loading) {
-    return <div className="loading-msg">Loading supplier engine...</div>;
-  }
+  // Admin: compute weighted score from draft fields (stored 0-10, API returns ×10)
+  const calcWeighted = (d) => {
+    const p = parseFloat(d.price_score) || 0;
+    const t = parseFloat(d.technical_score) || 0;
+    const de = parseFloat(d.delivery_score) || 0;
+    const w = parseFloat(d.warranty_score) || 0;
+    const s = parseFloat(d.support_score) || 0;
+    const c = parseFloat(d.certification_score) || 0;
+    return parseFloat((p * 0.20 + t * 0.30 + de * 0.15 + w * 0.15 + s * 0.10 + c * 0.10).toFixed(2));
+  };
+
+  const saveSupplier = async () => {
+    setError("");
+    if (!draft.name.trim()) { setError("Supplier name is required."); return; }
+    // Convert 0-100 display scores back to 0-10 for storage
+    const toStore = (v) => v === "" ? null : parseFloat(v) / 10;
+    const payload = {
+      name: draft.name.trim(),
+      component_category: draft.component_category || null,
+      country: draft.country || null,
+      tier: draft.tier || null,
+      price_score: toStore(draft.price_score),
+      technical_score: toStore(draft.technical_score),
+      delivery_score: toStore(draft.delivery_score),
+      warranty_score: toStore(draft.warranty_score),
+      support_score: toStore(draft.support_score),
+      certification_score: toStore(draft.certification_score),
+    };
+    const method = editingId ? "PUT" : "POST";
+    const url = editingId
+      ? `${API_BASE}/api/admin/suppliers/${editingId}`
+      : `${API_BASE}/api/admin/suppliers`;
+    const res = await fetch(url, {
+      method,
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (res.status === 401) { onUnauthorized?.(); return; }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      setError(err.detail || "Failed to save supplier");
+      return;
+    }
+    setDraft(BLANK_SUPPLIER);
+    setEditingId(null);
+    setShowForm(false);
+    await loadData();
+    flash(editingId ? "Supplier updated." : "Supplier added.");
+  };
+
+  const startEdit = (s) => {
+    // API returns ×10 scores, form uses 0-100
+    setDraft({
+      name: s.name,
+      component_category: s.component_category || "",
+      country: s.country || "",
+      tier: s.tier || "Tier 1",
+      price_score: s.price_score ?? "",
+      technical_score: s.technical_score ?? "",
+      delivery_score: s.delivery_score ?? "",
+      warranty_score: s.warranty_score ?? "",
+      support_score: s.support_score ?? "",
+      certification_score: s.certification_score ?? "",
+    });
+    setEditingId(s.id);
+    setShowForm(true);
+  };
+
+  const deleteSupplier = async (id) => {
+    if (!window.confirm("Delete this supplier?")) return;
+    const res = await fetch(`${API_BASE}/api/admin/suppliers/${id}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    if (res.status === 401) { onUnauthorized?.(); return; }
+    if (!res.ok) { setError("Failed to delete supplier"); return; }
+    await loadData();
+    flash("Supplier deleted.");
+  };
+
+  const categories = ["All", ...new Set(suppliers.map(s => s.component_category).filter(Boolean))];
+  const filtered = catFilter === "All" ? suppliers : suppliers.filter(s => s.component_category === catFilter);
+
+  if (loading) return <div className="loading-msg">Loading supplier engine…</div>;
 
   return (
     <div className="tab-content">
       {error && <div className="error-bar">{error}</div>}
+      {successMsg && <div className="success-bar">{successMsg}</div>}
+
       <div className="kpi-row">
         <KPICard label="Total Suppliers" value={suppliers.length} accent="blue" />
-        <KPICard label="Weight: Price" value={`${weights?.price ?? 30}%`} accent="green" />
+        <KPICard label="Categories" value={categories.length - 1} accent="green" />
         <KPICard label="Weight: Technical" value={`${weights?.technical ?? 25}%`} accent="amber" />
       </div>
 
+      {/* Admin: Add / Edit form */}
+      {isAdmin && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <div className="calc-btn-row" style={{ justifyContent: "flex-start" }}>
+            <button className="load-btn" onClick={() => { setShowForm(v => !v); setDraft(BLANK_SUPPLIER); setEditingId(null); }}>
+              {showForm ? "Close Form" : "Add New Supplier"}
+            </button>
+          </div>
+
+          {showForm && (
+            <>
+              <div className="section-header" style={{ marginTop: "1rem" }}><span>{editingId ? "Edit Supplier" : "New Supplier"}</span></div>
+              <div className="two-col" style={{ marginTop: "0.5rem" }}>
+                <div>
+                  <label className="input-label">Supplier Name *</label>
+                  <input className="inp" value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} placeholder="e.g., Sungrow" />
+                </div>
+                <div>
+                  <label className="input-label">Component Category</label>
+                  <input className="inp" value={draft.component_category} onChange={e => setDraft({ ...draft, component_category: e.target.value })} placeholder="e.g., BATTERY SYSTEM" />
+                </div>
+                <div>
+                  <label className="input-label">Country</label>
+                  <input className="inp" value={draft.country} onChange={e => setDraft({ ...draft, country: e.target.value })} placeholder="e.g., India" />
+                </div>
+                <div>
+                  <label className="input-label">Tier</label>
+                  <select className="inp" value={draft.tier} onChange={e => setDraft({ ...draft, tier: e.target.value })}>
+                    <option>Tier 1</option><option>Tier 2</option><option>Tier 3</option>
+                  </select>
+                </div>
+              </div>
+              <div className="section-header" style={{ marginTop: "1rem" }}><span>Scores (0 – 100)</span></div>
+              <div className="two-col" style={{ marginTop: "0.5rem" }}>
+                {[
+                  ["price_score",   "Price Score"],
+                  ["technical_score", "Technical Score"],
+                  ["delivery_score", "Delivery Score"],
+                  ["warranty_score", "Warranty Score"],
+                  ["support_score",  "Support Score"],
+                  ["certification_score", "Certification Score"],
+                ].map(([key, label]) => (
+                  <div key={key}>
+                    <label className="input-label">{label}</label>
+                    <input className="inp" type="number" min="0" max="100" step="0.1"
+                      value={draft[key]}
+                      onChange={e => setDraft({ ...draft, [key]: e.target.value })}
+                      placeholder="0–100" />
+                  </div>
+                ))}
+              </div>
+              <div className="calc-btn-row" style={{ justifyContent: "flex-start", marginTop: "1rem" }}>
+                <button className="calc-btn" onClick={saveSupplier}>{editingId ? "Update Supplier" : "Save Supplier"}</button>
+                {editingId && (
+                  <button className="btn-secondary" onClick={() => { setDraft(BLANK_SUPPLIER); setEditingId(null); setShowForm(false); }}>
+                    Cancel
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       <div className="two-col">
+        {/* Scoring weights — admin editable, user read-only */}
         <div className="card">
-          <div className="card-title">Scoring Weights (Configurable)</div>
+          <div className="card-title">Scoring Weights</div>
           {Object.entries(weights || {}).map(([key, val]) => (
             <div key={key} className="input-row">
               <label className="input-label">{key.charAt(0).toUpperCase() + key.slice(1)}</label>
-              <input
-                type="number"
-                value={val}
-                onChange={e => setWeights({ ...weights, [key]: parseInt(e.target.value) })}
-                className="inp"
-                min="0"
-                max="100"
-              />
+              {isAdmin ? (
+                <input type="number" value={val}
+                  onChange={e => setWeights({ ...weights, [key]: parseInt(e.target.value) })}
+                  className="inp" min="0" max="100" />
+              ) : (
+                <span className="inp" style={{ display: "flex", alignItems: "center", color: "var(--text)" }}>{val}</span>
+              )}
               <span className="input-unit">%</span>
             </div>
           ))}
-          <button className="calc-btn" onClick={handleSaveWeights} style={{marginTop: "1rem"}}>
-            Save Weights
-          </button>
+          {isAdmin && (
+            <button className="calc-btn" onClick={handleSaveWeights} style={{ marginTop: "1rem" }}>Save Weights</button>
+          )}
         </div>
 
+        {/* Supplier table with category filter */}
         <div className="card">
           <div className="card-title">Supplier Rankings</div>
+          <div className="bom-filter-row" style={{ marginBottom: "0.5rem" }}>
+            {categories.map(c => (
+              <button key={c} className={`filter-btn ${catFilter === c ? "active" : ""}`} onClick={() => setCatFilter(c)}>{c}</button>
+            ))}
+          </div>
           <div className="table-scroll">
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Supplier</th><th>Category</th><th>Price</th><th>Tech</th><th>Delivery</th><th>Weighted</th>
+                  <th>Supplier</th><th>Category</th><th>Country</th>
+                  <th>Price</th><th>Tech</th><th>Delivery</th><th>Weighted</th>
+                  {isAdmin && <th>Actions</th>}
                 </tr>
               </thead>
               <tbody>
-                {suppliers.map(s => (
+                {filtered.map(s => (
                   <tr key={s.id}>
-                    <td>{s.name}</td>
+                    <td><strong>{s.name}</strong></td>
                     <td><span className="cat-badge">{s.component_category}</span></td>
-                    <td>{s.price_score || "-"}</td>
-                    <td>{s.technical_score || "-"}</td>
-                    <td>{s.delivery_score || "-"}</td>
-                    <td className={s.weighted_score > 70 ? "pos" : ""}>{s.weighted_score || "-"}</td>
+                    <td>{s.country || "—"}</td>
+                    <td>{s.price_score ?? "—"}</td>
+                    <td>{s.technical_score ?? "—"}</td>
+                    <td>{s.delivery_score ?? "—"}</td>
+                    <td className={s.weighted_score > 70 ? "pos" : ""}><strong>{s.weighted_score ?? "—"}</strong></td>
+                    {isAdmin && (
+                      <td style={{ display: "flex", gap: "0.25rem" }}>
+                        <button className="edit-btn" onClick={() => startEdit(s)}>Edit</button>
+                        <button className="edit-btn" style={{ background: "#dc2626" }} onClick={() => deleteSupplier(s.id)}>Del</button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -755,8 +916,8 @@ function SupplierEngineTab({ authHeaders, onUnauthorized }) {
 // ── Tab: Analytics (ROI, LCOS, Payback) ───────────────────────────────────────
 function AnalyticsTab({ data }) {
   if (!data) return <EmptyState />;
-  
-  const { sizing, capex, opex, lcos, savings, roi, cashflow_years, sensitivity } = data;
+
+  const { sizing, capex, opex, lcos, savings, roi, cashflow_years, sensitivity, inputs } = data;
   const breakeven = cashflow_years?.find(y => y.cumulative_net >= 0);
 
   const downloadBlob = (blob, filename) => {
@@ -768,72 +929,418 @@ function AnalyticsTab({ data }) {
     URL.revokeObjectURL(url);
   };
 
+  // Helper to format data for exports
+  const getReportData = () => {
+    const reportDate = new Date().toLocaleString();
+    return {
+      reportDate,
+      projectInputs: inputs || {},
+      sizing: sizing || {},
+      capex: capex || {},
+      opex: opex || {},
+      lcos: lcos || {},
+      savings: savings || {},
+      roi: roi || {},
+      cashflow_years: cashflow_years || [],
+      sensitivity: sensitivity || {}
+    };
+  };
+
   const downloadCSV = () => {
-    const rows = [
-      ["Metric", "Value"],
-      ["Total CAPEX", capex.total_capex],
-      ["LCOS", lcos.lcos_inr_per_kwh],
-      ["Payback Years", roi.simple_payback_yrs],
-      ["ROI 10Y %", roi.roi_10yr_pct],
-      ["Annual Savings", savings.total_annual_savings],
-      ["Net Annual Benefit", roi.net_annual_benefit],
+    const r = getReportData();
+    const sections = [];
+
+    // Project Information
+    sections.push(["BESS COMPREHENSIVE PROJECT REPORT"], ["Generated:", r.reportDate], [""], [""]];
+
+    // Project Wizard Inputs
+    sections.push(["PROJECT WIZARD INPUTS"], [""]];
+    sections.push(["Parameter", "Value"]);
+    if (r.projectInputs) {
+      sections.push(["Peak Demand (kW)", r.projectInputs.peak_demand_kw]);
+      sections.push(["Load Growth (%)", r.projectInputs.load_growth_pct]);
+      sections.push(["Peak Hours", r.projectInputs.peak_hours]);
+      sections.push(["Off-Peak Hours", r.projectInputs.off_peak_hours]);
+      sections.push(["Peak Tariff (INR/kWh)", r.projectInputs.peak_tariff]);
+      sections.push(["Off-Peak Tariff (INR/kWh)", r.projectInputs.off_peak_tariff]);
+      sections.push(["Solar Generation (kWh/kWp/day)", r.projectInputs.solar_gen_per_kwp_day]);
+      sections.push(["Solar Capital Cost (INR/kWp)", r.projectInputs.solar_capex_per_kwp]);
+      sections.push(["Battery Module (kWh)", r.projectInputs.battery_module_kwh]);
+      sections.push(["Battery Unit Price (INR/kWh)", r.projectInputs.battery_unit_price_inr_per_kwh]);
+    }
+    sections.push([""], [""]);
+
+    // Sizing Summary
+    sections.push(["SYSTEM SIZING"], [""]]);
+    sections.push(["Parameter", "Value"]);
+    if (r.sizing) {
+      sections.push(["BESS Capacity (kWh)", r.sizing.bess_kwh]);
+      sections.push(["BESS Power (kW)", r.sizing.bess_kw]);
+      sections.push(["Solar Capacity (kWp)", r.sizing.solar_kwp]);
+      sections.push(["Battery Modules", r.sizing.num_modules]);
+      sections.push(["Inverters", r.sizing.num_inverters]);
+      sections.push(["Rack Estimate", r.sizing.rack_estimate]);
+    }
+    sections.push([""], [""]);
+
+    // CAPEX Breakdown
+    sections.push(["CAPITAL EXPENDITURE (CAPEX)"], [""]]);
+    sections.push(["Item", "Value (INR)"]);
+    if (r.capex) {
+      sections.push(["Battery Cost", r.capex.battery_cost]);
+      sections.push(["PCS/Inverter Cost", r.capex.pcs_cost]);
+      sections.push(["BOS Cost", r.capex.bos_cost]);
+      sections.push(["Solar Cost", r.capex.solar_cost]);
+      sections.push(["Installation Cost", r.capex.installation_cost]);
+      sections.push(["TOTAL CAPEX", r.capex.total_capex]);
+    }
+    sections.push([""], [""]);
+
+    // OPEX Breakdown
+    sections.push(["OPERATIONAL EXPENDITURE (OPEX) - Annual"], [""]]);
+    sections.push(["Item", "Value (INR/year)"]);
+    if (r.opex) {
+      sections.push(["Battery Replacement", r.opex.battery_replacement]);
+      sections.push(["Maintenance", r.opex.maintenance]);
+      sections.push(["Insurance", r.opex.insurance]);
+      sections.push(["O&M Solar", r.opex.om_solar]);
+      sections.push(["Annual OPEX", r.opex.annual_opex]);
+    }
+    sections.push([""], [""]);
+
+    // Analytics Summary
+    sections.push(["FINANCIAL ANALYTICS"], [""]]);
+    sections.push(["Metric", "Value"]);
+    if (r.lcos) sections.push(["LCOS", `${fmt(r.lcos.lcos_inr_per_kwh, 2)} INR/kWh`]);
+    if (r.roi) {
+      sections.push(["Simple Payback", `${fmt(r.roi.simple_payback_yrs, 1)} years`]);
+      sections.push(["10-Year ROI", `${fmt(r.roi.roi_10yr_pct, 1)}%`]);
+      sections.push(["Net Annual Benefit", fmtCur(r.roi.net_annual_benefit)]);
+    }
+    if (r.savings) {
+      sections.push(["Total Annual Savings", fmtCur(r.savings.total_annual_savings)]);
+    }
+    sections.push([""], [""]);
+
+    // Cash Flow
+    if (r.cashflow_years && r.cashflow_years.length > 0) {
+      sections.push(["10-YEAR CASH FLOW PROJECTION"], [""]]);
+      sections.push(["Year", "Revenue", "OPEX", "Net Cashflow", "Cumulative"]);
+      r.cashflow_years.forEach(year => {
+        sections.push([
+          year.year,
+          year.revenue,
+          year.opex,
+          year.net_cashflow,
+          year.cumulative_net
+        ]);
+      });
+    }
+
+    const csv = sections.map((r) =>
+      r.map((v) => `"${String(v ?? "").replaceAll("\"", "\"\"")}"`).join(",")
+    ).join("\n");
+
+    downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8;" }), "bess-complete-report.csv");
+  };
+
+  const downloadExcel = () => {
+    const r = getReportData();
+    const XLSX = window.XLSX || require('xlsx');
+
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: Project Summary
+    const summaryData = [
+      ["BESS PROJECT REPORT", ""],
+      ["Generated", r.reportDate],
+      ["", ""],
+      ["SYSTEM SIZING", ""],
+      ["BESS Capacity", r.sizing?.bess_kwh, "kWh"],
+      ["BESS Power", r.sizing?.bess_kw, "kW"],
+      ["Solar Capacity", r.sizing?.solar_kwp, "kWp"],
+      ["", ""],
+      ["FINANCIAL SUMMARY", ""],
+      ["Total CAPEX", r.capex?.total_capex, "INR"],
+      ["Annual OPEX", r.opex?.annual_opex, "INR"],
+      ["LCOS", r.lcos?.lcos_inr_per_kwh, "INR/kWh"],
+      ["Simple Payback", r.roi?.simple_payback_yrs, "years"],
+      ["10-Year ROI", r.roi?.roi_10yr_pct, "%"],
+      ["Net Annual Benefit", r.roi?.net_annual_benefit, "INR"],
     ];
-    const csv = rows.map((r) => r.map((v) => `"${String(v ?? "").replaceAll("\"", "\"\"")}"`).join(",")).join("\n");
-    downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8;" }), "analytics-report.csv");
+    const ws1 = XLSX.utils.aoa_to_sheet(summaryData);
+    XLSX.utils.book_append_sheet(wb, ws1, "Summary");
+
+    // Sheet 2: Project Inputs
+    const inputsData = [["Parameter", "Value", "Unit"]];
+    if (r.projectInputs) {
+      inputsData.push(
+        ["Peak Demand", r.projectInputs.peak_demand_kw, "kW"],
+        ["Load Growth", r.projectInputs.load_growth_pct, "%"],
+        ["Peak Hours", r.projectInputs.peak_hours, "hours"],
+        ["Off-Peak Hours", r.projectInputs.off_peak_hours, "hours"],
+        ["Peak Tariff", r.projectInputs.peak_tariff, "INR/kWh"],
+        ["Off-Peak Tariff", r.projectInputs.off_peak_tariff, "INR/kWh"],
+        ["Solar Generation", r.projectInputs.solar_gen_per_kwp_day, "kWh/kWp/day"],
+        ["Solar CAPEX", r.projectInputs.solar_capex_per_kwp, "INR/kWp"],
+        ["Battery Module", r.projectInputs.battery_module_kwh, "kWh"],
+        ["Battery Price", r.projectInputs.battery_unit_price_inr_per_kwh, "INR/kWh"],
+        ["Battery Cycles", r.projectInputs.battery_cycles, "cycles"],
+        ["DoD", r.projectInputs.depth_of_discharge_pct, "%"],
+        ["Charging Efficiency", r.projectInputs.charging_efficiency_pct, "%"],
+        ["Discount Rate", r.projectInputs.discount_rate_pct, "%"],
+        ["Analysis Years", r.projectInputs.analysis_years, "years"],
+        ["Daily Cycles", r.projectInputs.daily_cycles, "cycles"],
+      );
+    }
+    const ws2 = XLSX.utils.aoa_to_sheet(inputsData);
+    XLSX.utils.book_append_sheet(wb, ws2, "Project Inputs");
+
+    // Sheet 3: CAPEX Breakdown
+    const capexData = [["Item", "Cost (INR)", "% of Total"]];
+    if (r.capex) {
+      const total = r.capex.total_capex || 1;
+      capexData.push(
+        ["Battery Cost", r.capex.battery_cost, ((r.capex.battery_cost/total)*100).toFixed(1)],
+        ["PCS/Inverter Cost", r.capex.pcs_cost, ((r.capex.pcs_cost/total)*100).toFixed(1)],
+        ["Balance of System", r.capex.bos_cost, ((r.capex.bos_cost/total)*100).toFixed(1)],
+        ["Solar PV Cost", r.capex.solar_cost, ((r.capex.solar_cost/total)*100).toFixed(1)],
+        ["Installation", r.capex.installation_cost, ((r.capex.installation_cost/total)*100).toFixed(1)],
+        ["TOTAL CAPEX", r.capex.total_capex, "100%"],
+      );
+    }
+    const ws3 = XLSX.utils.aoa_to_sheet(capexData);
+    XLSX.utils.book_append_sheet(wb, ws3, "CAPEX");
+
+    // Sheet 4: Cash Flow
+    if (r.cashflow_years && r.cashflow_years.length > 0) {
+      const cfData = [["Year", "Revenue (INR)", "OPEX (INR)", "Net Cashflow (INR)", "Cumulative Net (INR)"]];
+      r.cashflow_years.forEach(y => {
+        cfData.push([y.year, y.revenue, y.opex, y.net_cashflow, y.cumulative_net]);
+      });
+      const ws4 = XLSX.utils.aoa_to_sheet(cfData);
+      XLSX.utils.book_append_sheet(wb, ws4, "Cash Flow");
+    }
+
+    XLSX.writeFile(wb, "bess-complete-report.xlsx");
   };
 
   const downloadPDF = async () => {
     const { jsPDF } = await import("jspdf");
+    const { default: autoTable } = await import("jspdf-autotable");
+    const r = getReportData();
+
     const doc = new jsPDF();
     let y = 16;
-    doc.setFontSize(16);
-    doc.text("BESS Analytics Report", 14, y);
-    y += 10;
-    doc.setFontSize(11);
-    [
-      `Total CAPEX: ${fmtCur(capex.total_capex)}`,
-      `LCOS: INR ${fmt(lcos.lcos_inr_per_kwh, 2)}/kWh`,
-      `Payback: ${roi.simple_payback_yrs} years`,
-      `10Y ROI: ${fmt(roi.roi_10yr_pct, 1)}%`,
-      `Annual Savings: ${fmtCur(savings.total_annual_savings)}`,
-      `Net Annual Benefit: ${fmtCur(roi.net_annual_benefit)}`,
-    ].forEach((line) => {
-      doc.text(line, 14, y);
-      y += 8;
+
+    // Title
+    doc.setFontSize(18);
+    doc.text("BESS Project Report", 14, y);
+    y += 8;
+
+    doc.setFontSize(10);
+    doc.text(`Generated: ${r.reportDate}`, 14, y);
+    y += 12;
+
+    // Project Inputs Section
+    doc.setFontSize(14);
+    doc.text("1. Project Wizard Inputs", 14, y);
+    y += 8;
+
+    if (r.projectInputs) {
+      autoTable(doc, {
+        startY: y,
+        head: [["Parameter", "Value"]],
+        body: [
+          ["Peak Demand", `${r.projectInputs.peak_demand_kw} kW`],
+          ["Peak Hours", `${r.projectInputs.peak_hours} hrs`],
+          ["Peak Tariff", `₹${r.projectInputs.peak_tariff}/kWh`],
+          ["Off-Peak Tariff", `₹${r.projectInputs.off_peak_tariff}/kWh`],
+          ["Solar Generation", `${r.projectInputs.solar_gen_per_kwp_day} kWh/kWp/day`],
+          ["Battery Module", `${r.projectInputs.battery_module_kwh} kWh`],
+          ["Battery Price", `₹${fmt(r.projectInputs.battery_unit_price_inr_per_kwh)}/kWh`],
+        ],
+        theme: 'grid',
+        headStyles: { fillColor: [41, 128, 185] },
+        styles: { fontSize: 9 },
+      });
+      y = doc.lastAutoTable.finalY + 10;
+    }
+
+    // Sizing Section
+    doc.setFontSize(14);
+    doc.text("2. System Sizing", 14, y);
+    y += 8;
+
+    if (r.sizing) {
+      autoTable(doc, {
+        startY: y,
+        head: [["Component", "Size", "Units"]],
+        body: [
+          ["BESS Capacity", fmt(r.sizing.bess_kwh), "kWh"],
+          ["BESS Power", fmt(r.sizing.bess_kw), "kW"],
+          ["Solar PV", fmt(r.sizing.solar_kwp), "kWp"],
+          ["Battery Modules", r.sizing.num_modules, "modules"],
+          ["Inverters", r.sizing.num_inverters, "units"],
+          ["Battery Racks", r.sizing.rack_estimate, "racks"],
+        ],
+        theme: 'grid',
+        headStyles: { fillColor: [46, 204, 113] },
+        styles: { fontSize: 9 },
+      });
+      y = doc.lastAutoTable.finalY + 10;
+    }
+
+    // Financial Summary Section
+    doc.setFontSize(14);
+    doc.text("3. Financial Summary", 14, y);
+    y += 8;
+
+    const finBody = [];
+    if (r.capex) finBody.push(["Total CAPEX", fmtCur(r.capex.total_capex)]);
+    if (r.opex) finBody.push(["Annual OPEX", fmtCur(r.opex.annual_opex)]);
+    if (r.lcos) finBody.push(["Levelized Cost (LCOS)", `₹${fmt(r.lcos.lcos_inr_per_kwh, 2)}/kWh`]);
+    if (r.roi) {
+      finBody.push(["Simple Payback", `${fmt(r.roi.simple_payback_yrs, 1)} years`]);
+      finBody.push(["10-Year ROI", `${fmt(r.roi.roi_10yr_pct, 1)}%`]);
+      finBody.push(["Net Annual Benefit", fmtCur(r.roi.net_annual_benefit)]);
+    }
+    if (r.savings) finBody.push(["Annual Savings", fmtCur(r.savings.total_annual_savings)]);
+
+    autoTable(doc, {
+      startY: y,
+      head: [["Metric", "Value"]],
+      body: finBody,
+      theme: 'grid',
+      headStyles: { fillColor: [231, 76, 60] },
+      styles: { fontSize: 9 },
     });
-    doc.save("analytics-report.pdf");
+    y = doc.lastAutoTable.finalY + 10;
+
+    // Cash Flow Table (if space permits)
+    if (r.cashflow_years && r.cashflow_years.length > 0 && y < 200) {
+      doc.addPage();
+      y = 16;
+      doc.setFontSize(14);
+      doc.text("4. 10-Year Cash Flow Projection", 14, y);
+      y += 8;
+
+      autoTable(doc, {
+        startY: y,
+        head: [["Year", "Revenue", "OPEX", "Net Cashflow", "Cumulative"]],
+        body: r.cashflow_years.slice(0, 10).map(y => [
+          y.year,
+          fmtCur(y.revenue),
+          fmtCur(y.opex),
+          fmtCur(y.net_cashflow),
+          fmtCur(y.cumulative_net)
+        ]),
+        theme: 'grid',
+        headStyles: { fillColor: [155, 89, 182] },
+        styles: { fontSize: 8 },
+      });
+    }
+
+    doc.save("bess-complete-report.pdf");
   };
 
   const downloadDOCX = async () => {
-    const { Document, Packer, Paragraph, TextRun } = await import("docx");
-    const doc = new Document({
-      sections: [
-        {
-          children: [
-            new Paragraph({ children: [new TextRun({ text: "BESS Analytics Report", bold: true, size: 30 })] }),
-            new Paragraph(`Total CAPEX: ${fmtCur(capex.total_capex)}`),
-            new Paragraph(`LCOS: INR ${fmt(lcos.lcos_inr_per_kwh, 2)}/kWh`),
-            new Paragraph(`Payback: ${roi.simple_payback_yrs} years`),
-            new Paragraph(`10Y ROI: ${fmt(roi.roi_10yr_pct, 1)}%`),
-            new Paragraph(`Annual Savings: ${fmtCur(savings.total_annual_savings)}`),
-            new Paragraph(`Net Annual Benefit: ${fmtCur(roi.net_annual_benefit)}`),
-          ],
-        },
-      ],
+    const { Document, Packer, Paragraph, TextRun, Table, TableCell, TableRow, WidthType } = await import("docx");
+    const r = getReportData();
+
+    const createCell = (text, bold = false) => new TableCell({
+      children: [new Paragraph({
+        children: [new TextRun({ text: String(text), bold, size: 20 })]
+      })]
     });
+
+    const createRow = (cells) => new TableRow({ children: cells.map((c, i) => createCell(c, i === 0)) });
+
+    const children = [
+      new Paragraph({ children: [new TextRun({ text: "BESS Project Report", bold: true, size: 32 })] }),
+      new Paragraph({ children: [new TextRun({ text: `Generated: ${r.reportDate}`, size: 20 })] }),
+      new Paragraph(""),
+    ];
+
+    // Project Inputs Table
+    children.push(new Paragraph({ children: [new TextRun({ text: "1. Project Wizard Inputs", bold: true, size: 24 })] }));
+    children.push(new Paragraph(""));
+
+    if (r.projectInputs) {
+      const inputRows = [
+        createRow(["Parameter", "Value"]),
+        createRow(["Peak Demand", `${r.projectInputs.peak_demand_kw} kW`]),
+        createRow(["Peak Hours", `${r.projectInputs.peak_hours} hours`]),
+        createRow(["Peak Tariff", `₹${r.projectInputs.peak_tariff}/kWh`]),
+        createRow(["Off-Peak Tariff", `₹${r.projectInputs.off_peak_tariff}/kWh`]),
+        createRow(["Solar Generation", `${r.projectInputs.solar_gen_per_kwp_day} kWh/kWp/day`]),
+        createRow(["Battery Module Capacity", `${r.projectInputs.battery_module_kwh} kWh`]),
+        createRow(["Battery Unit Price", `₹${fmt(r.projectInputs.battery_unit_price_inr_per_kwh)}/kWh`]),
+      ];
+      children.push(new Table({ rows: inputRows, width: { size: 100, type: WidthType.PERCENTAGE } }));
+      children.push(new Paragraph(""));
+    }
+
+    // System Sizing
+    children.push(new Paragraph({ children: [new TextRun({ text: "2. System Sizing", bold: true, size: 24 })] }));
+    children.push(new Paragraph(""));
+
+    if (r.sizing) {
+      const sizingRows = [
+        createRow(["Component", "Value"]),
+        createRow(["BESS Energy Capacity", `${fmt(r.sizing.bess_kwh)} kWh`]),
+        createRow(["BESS Power Rating", `${fmt(r.sizing.bess_kw)} kW`]),
+        createRow(["Solar PV Capacity", `${fmt(r.sizing.solar_kwp)} kWp`]),
+        createRow(["Battery Modules", `${r.sizing.num_modules} units`]),
+        createRow(["Inverters", `${r.sizing.num_inverters} units`]),
+      ];
+      children.push(new Table({ rows: sizingRows, width: { size: 100, type: WidthType.PERCENTAGE } }));
+      children.push(new Paragraph(""));
+    }
+
+    // Financial Summary
+    children.push(new Paragraph({ children: [new TextRun({ text: "3. Financial Analytics", bold: true, size: 24 })] }));
+    children.push(new Paragraph(""));
+
+    const finRows = [createRow(["Metric", "Value"])];
+    if (r.capex) finRows.push(createRow(["Total CAPEX", fmtCur(r.capex.total_capex)]));
+    if (r.opex) finRows.push(createRow(["Annual OPEX", fmtCur(r.opex.annual_opex)]));
+    if (r.lcos) finRows.push(createRow(["Levelized Cost of Storage (LCOS)", `₹${fmt(r.lcos.lcos_inr_per_kwh, 2)}/kWh`]));
+    if (r.roi) {
+      finRows.push(createRow(["Simple Payback Period", `${fmt(r.roi.simple_payback_yrs, 1)} years`]));
+      finRows.push(createRow(["10-Year ROI", `${fmt(r.roi.roi_10yr_pct, 1)}%`]));
+      finRows.push(createRow(["Net Annual Benefit", fmtCur(r.roi.net_annual_benefit)]));
+    }
+    if (r.savings) finRows.push(createRow(["Annual Savings", fmtCur(r.savings.total_annual_savings)]));
+
+    children.push(new Table({ rows: finRows, width: { size: 100, type: WidthType.PERCENTAGE } }));
+
+    const doc = new Document({ sections: [{ children }] });
     const blob = await Packer.toBlob(doc);
-    downloadBlob(blob, "analytics-report.docx");
+    downloadBlob(blob, "bess-complete-report.docx");
   };
 
   return (
     <div className="tab-content">
       <div className="card" style={{ marginBottom: "1rem" }}>
-        <div className="card-title">Export Report</div>
-        <div className="calc-btn-row" style={{ justifyContent: "flex-start" }}>
-          <button className="load-btn" onClick={downloadPDF}>Download PDF</button>
-          <button className="load-btn" onClick={downloadDOCX}>Download DOCX</button>
-          <button className="load-btn" onClick={downloadCSV}>Download CSV</button>
+        <div className="card-title">Export Complete Project Report</div>
+        <div className="calc-btn-row" style={{ justifyContent: "flex-start", gap: "0.5rem", flexWrap: "wrap" }}>
+          <button className="load-btn" onClick={downloadPDF} title="Download PDF report with all project data">
+            📄 PDF
+          </button>
+          <button className="load-btn" onClick={downloadDOCX} title="Download Word document">
+            📝 DOCX
+          </button>
+          <button className="load-btn" onClick={downloadExcel} title="Download Excel workbook with multiple sheets">
+            📊 Excel
+          </button>
+          <button className="load-btn" onClick={downloadCSV} title="Download CSV data file">
+            📋 CSV
+          </button>
         </div>
+        <p style={{ fontSize: "12px", color: "#8b949e", marginTop: "0.5rem" }}>
+          Exports complete project data from Wizard inputs through Analysis including sizing, CAPEX/OPEX breakdown, and financial projections.
+        </p>
       </div>
 
       <div className="kpi-row">
@@ -871,45 +1378,158 @@ function AnalyticsTab({ data }) {
 }
 
 // ── Tab: BOM ─────────────────────────────────────────────────────────────────
-function BOMTab({ isAdmin, authHeaders }) {
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
 
-  const [filter, setFilter] = useState("All");
+function buildBomFromSizing(sizing, inputs) {
+  if (!sizing) return null;
+  const { num_modules, module_kwh, num_inverters, inverter_kw } = sizing;
+  const mKwh = module_kwh || inputs?.battery_module_kwh || 52.25;
+  const iKw = inverter_kw || 50;   // backend uses 50 kW inverters
+  const nMod = num_modules || 1;
+  const nInv = num_inverters || 1;
+
+  const battery_cost_per_kwh = 8000;
+  const batteryUnitPrice = mKwh * battery_cost_per_kwh;
+  const batteryTotal = nMod * batteryUnitPrice;
+
+  const racks = Math.max(1, Math.floor((nMod * mKwh) / 100) + 1);
+  const rackPrice = 75000;
+
+  const inverterUnitPrice = iKw * 3500;
+  const bmsPrice = batteryTotal * 0.10;
+
+  return [
+    { id: 1, category: "Battery System",          description: `LFP Battery Module ${mKwh} kWh`,   qty: nMod,  unit: "module",  spec: `${mKwh} kWh, 3.2V LFP, 8000 cycles, 10 yr warranty`,     unit_price: batteryUnitPrice },
+    { id: 2, category: "Enclosure",                description: "Battery Cabinet with Cooling",      qty: racks, unit: "cabinet", spec: "IP55, Active cooling, Fire suppression ready",              unit_price: rackPrice },
+    { id: 3, category: "Power Conversion System",  description: `PCS / Inverter ${iKw} kW`,         qty: nInv,  unit: "unit",    spec: `${iKw} kW, 3-phase, 415V, 97.5% efficiency`,               unit_price: inverterUnitPrice },
+    { id: 4, category: "BMS",                      description: "Battery Management System",         qty: 1,     unit: "set",     spec: "Cell balancing, SOC/SOH monitoring, CAN/Modbus",           unit_price: bmsPrice },
+    { id: 5, category: "EMS",                      description: "Energy Management System",          qty: 1,     unit: "set",     spec: "Arbitrage control, scheduling, reporting",                  unit_price: 150000 },
+    { id: 6, category: "AC Side",                  description: "AC & DC Switchgear",               qty: 1,     unit: "set",     spec: "ACB, MCCB, DC breakers, fuses",                            unit_price: 125000 },
+    { id: 7, category: "DC Side",                  description: "HV Cables, Busbar, Connectors",    qty: 1,     unit: "lot",     spec: "Fire retardant, UV resistant",                              unit_price: 50000 },
+  ].map(item => ({ ...item, line_total: item.qty * item.unit_price }));
+}
+
+const BLANK_BOM_ITEM = { category: "", description: "", qty: "1", unit: "pcs", spec: "", unit_price: "" };
+
+function BOMTab({ isAdmin, authHeaders, result }) {
+  const sizing = result?.sizing;
+  const inputs = result?.inputs;
+  const hasSizing = !!sizing;
+
+  // Sizing-based BOM items (computed, editable in-session)
+  const [bomItems, setBomItems] = useState([]);
   const [editingId, setEditingId] = useState(null);
-  const [showForm, setShowForm] = useState(false);
-  const [draft, setDraft] = useState({ category: "", description: "", qty: "", unit: "", spec: "", unit_price: "" });
+  const [editDraft, setEditDraft] = useState({ qty: "", unit_price: "", description: "", spec: "", category: "", unit: "" });
+  const [filter, setFilter] = useState("All");
 
-  const loadItems = useCallback(async () => {
-    setLoading(true);
-    setError("");
+  // Add-component form (shown in sized BOM mode for all users)
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [addDraft, setAddDraft] = useState(BLANK_BOM_ITEM);
+
+  // Catalog items (from DB — shown when no optimization has run yet)
+  const [catalogItems, setCatalogItems] = useState([]);
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState("");
+
+  // Admin catalog CRUD state
+  const [showCatalogForm, setShowCatalogForm] = useState(false);
+  const [catalogEditId, setCatalogEditId] = useState(null);
+  const [catalogDraft, setCatalogDraft] = useState({ category: "", description: "", qty: "", unit: "", spec: "", unit_price: "" });
+
+  // Always load catalog on mount (used as fallback + admin management)
+  const loadCatalog = useCallback(async () => {
+    setCatalogLoading(true);
+    setCatalogError("");
     try {
       const res = await fetch(`${API_BASE}/api/admin/bom`, { headers: authHeaders() });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Failed to load BOM");
-      }
+      if (!res.ok) throw new Error("Failed to load BOM");
       const data = await res.json();
-      setItems(Array.isArray(data) ? data : []);
+      setCatalogItems(Array.isArray(data) ? data : []);
     } catch (e) {
-      setError(e.message || "Failed to load BOM");
+      setCatalogError(e.message || "Failed to load BOM");
     } finally {
-      setLoading(false);
+      setCatalogLoading(false);
     }
   }, [authHeaders]);
 
-  useEffect(() => { loadItems(); }, [loadItems]);
+  useEffect(() => { loadCatalog(); }, [loadCatalog]);
 
-  const resetDraft = () => {
-    setEditingId(null);
-    setDraft({ category: "", description: "", qty: "", unit: "", spec: "", unit_price: "" });
-    setShowForm(false);
+  // Recompute BOM from sizing whenever a new optimization runs
+  useEffect(() => {
+    if (!sizing) return;
+    const computed = buildBomFromSizing(sizing, inputs);
+    if (computed) {
+      setBomItems(computed);
+      setEditingId(null);
+      setFilter("All");
+    }
+  }, [sizing]);
+
+  // ── Inline edit (sizing-based BOM) ──
+  const startEdit = (item) => {
+    setEditingId(item.id);
+    setEditDraft({
+      qty: String(item.qty),
+      unit_price: String(item.unit_price),
+      description: item.description,
+      spec: item.spec,
+      category: item.category,
+      unit: item.unit,
+    });
   };
 
-  const editItem = (item) => {
-    setEditingId(item.id);
-    setDraft({
+  const saveEdit = (id) => {
+    setBomItems(prev => prev.map(item => {
+      if (item.id !== id) return item;
+      const qty = Number(editDraft.qty) || item.qty;
+      const unit_price = Number(editDraft.unit_price) || item.unit_price;
+      return {
+        ...item,
+        qty,
+        unit_price,
+        line_total: qty * unit_price,
+        description: editDraft.description || item.description,
+        spec: editDraft.spec !== undefined ? editDraft.spec : item.spec,
+        category: editDraft.category || item.category,
+        unit: editDraft.unit || item.unit,
+      };
+    }));
+    setEditingId(null);
+  };
+
+  // ── Add new component to sized BOM ──
+  const addComponent = () => {
+    const qty = Number(addDraft.qty) || 1;
+    const unit_price = Number(addDraft.unit_price) || 0;
+    const newItem = {
+      id: Date.now(),  // temp id
+      category: addDraft.category || "Custom",
+      description: addDraft.description,
+      qty,
+      unit: addDraft.unit || "pcs",
+      spec: addDraft.spec,
+      unit_price,
+      line_total: qty * unit_price,
+    };
+    setBomItems(prev => [...prev, newItem]);
+    setAddDraft(BLANK_BOM_ITEM);
+    setShowAddForm(false);
+  };
+
+  // ── Delete a row from sized BOM ──
+  const deleteItem = (id) => {
+    setBomItems(prev => prev.filter(item => item.id !== id));
+  };
+
+  // ── Catalog CRUD (admin) ──
+  const resetCatalogDraft = () => {
+    setCatalogEditId(null);
+    setCatalogDraft({ category: "", description: "", qty: "", unit: "", spec: "", unit_price: "" });
+    setShowCatalogForm(false);
+  };
+
+  const startCatalogEdit = (item) => {
+    setCatalogEditId(item.id);
+    setCatalogDraft({
       category: item.category || "",
       description: item.description || "",
       qty: String(Number(item.qty_formula) || ""),
@@ -917,121 +1537,171 @@ function BOMTab({ isAdmin, authHeaders }) {
       spec: item.spec || "",
       unit_price: String(item.unit_price ?? ""),
     });
-    setShowForm(true);
+    setShowCatalogForm(true);
   };
 
-  const saveItem = async () => {
-    setError("");
-    const isEditing = editingId !== null;
-    const endpoint = isEditing ? `${API_BASE}/api/admin/bom/${editingId}` : `${API_BASE}/api/admin/bom`;
+  const saveCatalogItem = async () => {
+    setCatalogError("");
+    const isEditing = catalogEditId !== null;
+    const endpoint = isEditing ? `${API_BASE}/api/admin/bom/${catalogEditId}` : `${API_BASE}/api/admin/bom`;
     const method = isEditing ? "PUT" : "POST";
-
     try {
       const res = await fetch(endpoint, {
         method,
-        headers: { ...authHeaders(), "X-User-Role": "admin", "Content-Type": "application/json" },
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify({
-          category: draft.category,
+          category: catalogDraft.category,
           subcategory: "",
-          description: draft.description,
-          spec: draft.spec,
-          qty_formula: String(Number(draft.qty) || 1),
-          unit: draft.unit || "pcs",
-          unit_price: Number(draft.unit_price) || 0,
+          description: catalogDraft.description,
+          spec: catalogDraft.spec,
+          qty_formula: String(Number(catalogDraft.qty) || 1),
+          unit: catalogDraft.unit || "pcs",
+          unit_price: Number(catalogDraft.unit_price) || 0,
         }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || "Failed to save BOM item");
       }
-      resetDraft();
-      await loadItems();
+      resetCatalogDraft();
+      await loadCatalog();
     } catch (e) {
-      setError(e.message || "Failed to save BOM item");
+      setCatalogError(e.message || "Failed to save BOM item");
     }
   };
 
-  const deleteItem = async (id) => {
-    if (!window.confirm("Delete this BOM item?")) return;
+  const deleteCatalogItem = async (id) => {
+    if (!window.confirm("Delete this catalog item?")) return;
     try {
-      const res = await fetch(`${API_BASE}/api/admin/bom/${id}`, {
-        method: "DELETE",
-        headers: { ...authHeaders(), "X-User-Role": "admin" },
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Failed to delete BOM item");
-      }
-      await loadItems();
+      const res = await fetch(`${API_BASE}/api/admin/bom/${id}`, { method: "DELETE", headers: authHeaders() });
+      if (!res.ok) throw new Error("Failed to delete");
+      await loadCatalog();
     } catch (e) {
-      setError(e.message || "Failed to delete BOM item");
+      setCatalogError(e.message || "Failed to delete");
     }
   };
 
-  // Map catalog rows to display rows
-  const viewerItems = items.map((item) => {
-    const qty = Number(item.qty_formula) || 1;
-    const unitPrice = Number(item.unit_price) || 0;
-    return {
-      id: item.id,
-      category: item.category,
-      description: item.description,
-      qty,
-      unit: item.unit || "pcs",
-      spec: item.spec || "",
-      unit_price: unitPrice,
-      line_total: qty * unitPrice,
-      _raw: item,
-    };
-  });
+  // ── Determine display items ──
+  // After optimization: use sizing-based computed BOM
+  // Before optimization: show catalog items with their default quantities
+  const displayItems = hasSizing
+    ? bomItems
+    : catalogItems.map(item => {
+        const qty = Number(item.qty_formula) || 1;
+        const unitPrice = Number(item.unit_price) || 0;
+        return { id: item.id, category: item.category, description: item.description, qty, unit: item.unit || "pcs", spec: item.spec || "", unit_price: unitPrice, line_total: qty * unitPrice, _catalogRaw: item };
+      });
 
-  const cats = [...new Set(viewerItems.map(i => i.category).filter(Boolean))];
-  const filtered = filter === "All" ? viewerItems : viewerItems.filter(i => i.category === filter);
+  const cats = [...new Set(displayItems.map(i => i.category).filter(Boolean))];
+  const filtered = filter === "All" ? displayItems : displayItems.filter(i => i.category === filter);
   const totalBom = filtered.reduce((sum, i) => sum + (Number(i.line_total) || 0), 0);
-  const lineItems = filtered.length;
-  const batteryShare = totalBom > 0 ? ((filtered?.[0]?.line_total || 0) / totalBom) * 100 : 0;
+  const batteryItem = filtered.find(i => i.category === "Battery System" || i.category === "Battery");
+  const batteryShare = totalBom > 0 ? ((batteryItem?.line_total || 0) / totalBom) * 100 : 0;
+
+  if (catalogLoading) return <div className="tab-content"><div className="loading-msg">Loading BOM…</div></div>;
 
   return (
     <div className="tab-content">
-      {loading && <div style={{ textAlign: "center", padding: "0.5rem", color: "#888" }}>Loading BOM…</div>}
-      <div className="kpi-row">
-        <KPICard label="Total BOM Cost" value={fmtCur(totalBom)} accent="red" />
-        <KPICard label="Line Items" value={lineItems} accent="blue" />
-        <KPICard label="Battery Share" value={`${fmt(batteryShare, 1)}%`} sub="of total BOM" accent="amber" />
+      {catalogError && <div className="error-bar">{catalogError}</div>}
+
+      {/* Banner: shows source of BOM data */}
+      <div className="card" style={{ marginBottom: "1rem", padding: "0.75rem 1rem", background: "var(--surface-2, #161b22)", borderLeft: `3px solid ${hasSizing ? "var(--teal, #14b8a6)" : "var(--amber, #f59e0b)"}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+          {hasSizing ? (
+            <>
+              <span style={{ color: "var(--teal, #14b8a6)", fontWeight: 600, fontSize: "13px" }}>Sized from Project Wizard</span>
+              <span style={{ color: "#8b949e", fontSize: "12px" }}>
+                {sizing.num_modules} modules × {inputs?.battery_module_kwh || 52.25} kWh &nbsp;|&nbsp;
+                {sizing.num_inverters} inverters × 50 kW &nbsp;|&nbsp;
+                {fmt(sizing.actual_installed_kwh)} kWh installed
+              </span>
+              <span style={{ marginLeft: "auto", color: "#8b949e", fontSize: "11px" }}>Click Edit to adjust qty or price</span>
+            </>
+          ) : (
+            <>
+              <span style={{ color: "var(--amber, #f59e0b)", fontWeight: 600, fontSize: "13px" }}>Component Catalog (Default)</span>
+              <span style={{ color: "#8b949e", fontSize: "12px" }}>Run an optimisation to get quantities sized to your project</span>
+            </>
+          )}
+        </div>
       </div>
 
-      {isAdmin && (
-        <div className="card" style={{ marginBottom: "1rem" }}>
-          <div className="calc-btn-row" style={{ justifyContent: "flex-start" }}>
-            <button className="load-btn" onClick={() => setShowForm((v) => !v)}>
-              {showForm ? "Close Form" : "Add New BOM Item"}
-            </button>
-          </div>
-
-          {showForm && (
-            <div className="two-col">
-              <input className="inp" placeholder="Category (e.g., Battery System)" value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })} />
-              <input className="inp" placeholder="Description (e.g., Battery Module)" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
-              <input className="inp" type="number" placeholder="Qty (e.g., 2)" value={draft.qty} onChange={(e) => setDraft({ ...draft, qty: e.target.value })} />
-              <input className="inp" placeholder="Unit (e.g., pcs)" value={draft.unit} onChange={(e) => setDraft({ ...draft, unit: e.target.value })} />
-              <input className="inp" placeholder="Specification (e.g., 51.2V, 100Ah)" value={draft.spec} onChange={(e) => setDraft({ ...draft, spec: e.target.value })} />
-              <input className="inp" type="number" placeholder="Unit Price (e.g., 250000)" value={draft.unit_price} onChange={(e) => setDraft({ ...draft, unit_price: e.target.value })} />
-              <div className="calc-btn-row" style={{ justifyContent: "flex-start", gridColumn: "1 / -1" }}>
-                <button className="calc-btn" onClick={saveItem}>{editingId !== null ? "Update BOM Item" : "Save BOM Item"}</button>
-                {editingId !== null && <button className="btn-secondary" onClick={resetDraft}>Cancel Edit</button>}
-              </div>
-            </div>
-          )}
-          {error && <div className="error-bar">{error}</div>}
-        </div>
-      )}
-      {!isAdmin && error && <div className="error-bar">{error}</div>}
+      <div className="kpi-row">
+        <KPICard label="Total BOM Cost" value={fmtCur(totalBom)} accent="red" />
+        <KPICard label="Line Items" value={filtered.length} accent="blue" />
+        <KPICard label="Battery Share" value={`${fmt(batteryShare, 1)}%`} sub="of total BOM" accent="amber" />
+        {hasSizing && <KPICard label="Installed Capacity" value={`${fmt(sizing.actual_installed_kwh)} kWh`} accent="green" />}
+      </div>
 
       <div className="bom-filter-row">
         {["All", ...cats].map(c => (
           <button key={c} className={`filter-btn ${filter === c ? "active" : ""}`} onClick={() => setFilter(c)}>{c}</button>
         ))}
       </div>
+
+      {/* Add Component button + form — available to all users in sized mode, admin in catalog mode */}
+      {(hasSizing || isAdmin) && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span className="card-title" style={{ marginBottom: 0 }}>Add Component</span>
+            <button className="load-btn" onClick={() => { setShowAddForm(v => !v); setAddDraft(BLANK_BOM_ITEM); }}>
+              {showAddForm ? "Close" : "+ Add Component"}
+            </button>
+          </div>
+
+          {showAddForm && (
+            <div className="two-col" style={{ marginTop: "0.75rem" }}>
+              <div>
+                <label className="input-label">Category</label>
+                <input className="inp" placeholder="e.g., Solar PV, Cabling, Civil" value={addDraft.category}
+                  onChange={e => setAddDraft(d => ({ ...d, category: e.target.value }))} />
+              </div>
+              <div>
+                <label className="input-label">Description *</label>
+                <input className="inp" placeholder="e.g., Solar Inverter 50kW" value={addDraft.description}
+                  onChange={e => setAddDraft(d => ({ ...d, description: e.target.value }))} />
+              </div>
+              <div>
+                <label className="input-label">Qty *</label>
+                <input className="inp" type="number" min="0" step="any" placeholder="1" value={addDraft.qty}
+                  onChange={e => setAddDraft(d => ({ ...d, qty: e.target.value }))} />
+              </div>
+              <div>
+                <label className="input-label">Unit</label>
+                <input className="inp" placeholder="pcs / set / lot / m" value={addDraft.unit}
+                  onChange={e => setAddDraft(d => ({ ...d, unit: e.target.value }))} />
+              </div>
+              <div>
+                <label className="input-label">Specification</label>
+                <input className="inp" placeholder="e.g., 50kW, 3-phase, IP65" value={addDraft.spec}
+                  onChange={e => setAddDraft(d => ({ ...d, spec: e.target.value }))} />
+              </div>
+              <div>
+                <label className="input-label">Unit Price (₹) *</label>
+                <input className="inp" type="number" min="0" step="any" placeholder="0" value={addDraft.unit_price}
+                  onChange={e => setAddDraft(d => ({ ...d, unit_price: e.target.value }))} />
+              </div>
+              {addDraft.qty && addDraft.unit_price && (
+                <div style={{ gridColumn: "1 / -1", color: "var(--teal, #14b8a6)", fontSize: "13px" }}>
+                  Line Total: {fmtCur((Number(addDraft.qty) || 0) * (Number(addDraft.unit_price) || 0))}
+                </div>
+              )}
+              <div className="calc-btn-row" style={{ justifyContent: "flex-start", gridColumn: "1 / -1" }}>
+                <button className="calc-btn"
+                  disabled={!addDraft.description.trim() || !addDraft.qty || !addDraft.unit_price}
+                  onClick={hasSizing ? addComponent : () => {
+                    setCatalogDraft({ ...addDraft });
+                    saveCatalogItem();
+                    setShowAddForm(false);
+                  }}>
+                  Add to BOM
+                </button>
+                <button className="btn-secondary" onClick={() => setShowAddForm(false)}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="card">
         <div className="table-scroll">
@@ -1040,27 +1710,70 @@ function BOMTab({ isAdmin, authHeaders }) {
               <tr>
                 <th>#</th><th>Category</th><th>Description</th>
                 <th>Qty</th><th>Unit</th><th>Specification</th>
-                <th>Unit Price</th><th>Line Total</th>
-                {isAdmin ? <th>Actions</th> : null}
+                <th>Unit Price (₹)</th><th>Line Total</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((item, idx) => (
                 <tr key={item.id}>
                   <td>{idx + 1}</td>
-                  <td><span className="cat-badge">{item.category}</span></td>
-                  <td>{item.description}</td>
-                  <td>{item.qty}</td>
-                  <td>{item.unit}</td>
-                  <td className="spec-cell">{item.spec}</td>
-                  <td>{fmtCur(item.unit_price)}</td>
-                  <td className="total-cell">{fmtCur(item.line_total)}</td>
-                  {isAdmin ? (
-                    <td style={{ display: "flex", gap: "0.25rem" }}>
-                      <button className="edit-btn" onClick={() => editItem(item._raw)}>Edit</button>
-                      <button className="edit-btn" style={{ background: "#dc2626" }} onClick={() => deleteItem(item.id)}>Del</button>
-                    </td>
-                  ) : null}
+                  {editingId === item.id ? (
+                    <>
+                      <td>
+                        <input className="inp" style={{ width: "100px", padding: "2px 6px" }} placeholder="Category"
+                          value={editDraft.category} onChange={e => setEditDraft(d => ({ ...d, category: e.target.value }))} />
+                      </td>
+                      <td>
+                        <input className="inp" style={{ width: "150px", padding: "2px 6px" }} placeholder="Description"
+                          value={editDraft.description} onChange={e => setEditDraft(d => ({ ...d, description: e.target.value }))} />
+                      </td>
+                      <td>
+                        <input type="number" className="inp" style={{ width: "65px", padding: "2px 6px" }}
+                          value={editDraft.qty} onChange={e => setEditDraft(d => ({ ...d, qty: e.target.value }))} />
+                      </td>
+                      <td>
+                        <input className="inp" style={{ width: "60px", padding: "2px 6px" }} placeholder="unit"
+                          value={editDraft.unit} onChange={e => setEditDraft(d => ({ ...d, unit: e.target.value }))} />
+                      </td>
+                      <td>
+                        <input className="inp" style={{ width: "160px", padding: "2px 6px" }} placeholder="Spec"
+                          value={editDraft.spec} onChange={e => setEditDraft(d => ({ ...d, spec: e.target.value }))} />
+                      </td>
+                      <td>
+                        <input type="number" className="inp" style={{ width: "110px", padding: "2px 6px" }}
+                          value={editDraft.unit_price} onChange={e => setEditDraft(d => ({ ...d, unit_price: e.target.value }))} />
+                      </td>
+                      <td className="total-cell">{fmtCur((Number(editDraft.qty) || 0) * (Number(editDraft.unit_price) || 0))}</td>
+                      <td style={{ display: "flex", gap: "0.25rem" }}>
+                        <button className="edit-btn" style={{ background: "#16a34a" }} onClick={() => saveEdit(item.id)}>Save</button>
+                        <button className="edit-btn" onClick={() => setEditingId(null)}>Cancel</button>
+                      </td>
+                    </>
+                  ) : (
+                    <>
+                      <td><span className="cat-badge">{item.category}</span></td>
+                      <td>{item.description}</td>
+                      <td>{item.qty}</td>
+                      <td>{item.unit}</td>
+                      <td className="spec-cell">{item.spec}</td>
+                      <td>{fmtCur(item.unit_price)}</td>
+                      <td className="total-cell">{fmtCur(item.line_total)}</td>
+                      <td style={{ display: "flex", gap: "0.25rem" }}>
+                        {hasSizing ? (
+                          <>
+                            <button className="edit-btn" onClick={() => startEdit(item)}>Edit</button>
+                            <button className="edit-btn" style={{ background: "#dc2626" }} onClick={() => deleteItem(item.id)}>Del</button>
+                          </>
+                        ) : isAdmin ? (
+                          <>
+                            <button className="edit-btn" onClick={() => startCatalogEdit(item._catalogRaw)}>Edit</button>
+                            <button className="edit-btn" style={{ background: "#dc2626" }} onClick={() => deleteCatalogItem(item.id)}>Del</button>
+                          </>
+                        ) : null}
+                      </td>
+                    </>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -1068,12 +1781,39 @@ function BOMTab({ isAdmin, authHeaders }) {
               <tr className="row-total">
                 <td colSpan={7}>TOTAL BOM EQUIPMENT COST</td>
                 <td>{fmtCur(totalBom)}</td>
-                {isAdmin ? <td></td> : null}
+                <td></td>
               </tr>
             </tfoot>
           </table>
         </div>
       </div>
+
+      {/* Admin: Manage Catalog (always visible to admin) */}
+      {isAdmin && hasSizing && (
+        <div className="card" style={{ marginTop: "1.5rem" }}>
+          <div className="card-title" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span>Manage Component Catalog</span>
+            <button className="load-btn" onClick={() => { setShowCatalogForm(v => !v); if (showCatalogForm) resetCatalogDraft(); }}>
+              {showCatalogForm ? "Close Form" : "Edit Catalog"}
+            </button>
+          </div>
+
+          {showCatalogForm && (
+            <div className="two-col" style={{ marginTop: "0.75rem", marginBottom: "1rem" }}>
+              <input className="inp" placeholder="Category (e.g., Battery System)" value={catalogDraft.category} onChange={e => setCatalogDraft({ ...catalogDraft, category: e.target.value })} />
+              <input className="inp" placeholder="Description" value={catalogDraft.description} onChange={e => setCatalogDraft({ ...catalogDraft, description: e.target.value })} />
+              <input className="inp" type="number" placeholder="Qty" value={catalogDraft.qty} onChange={e => setCatalogDraft({ ...catalogDraft, qty: e.target.value })} />
+              <input className="inp" placeholder="Unit (e.g., pcs)" value={catalogDraft.unit} onChange={e => setCatalogDraft({ ...catalogDraft, unit: e.target.value })} />
+              <input className="inp" placeholder="Specification" value={catalogDraft.spec} onChange={e => setCatalogDraft({ ...catalogDraft, spec: e.target.value })} />
+              <input className="inp" type="number" placeholder="Unit Price (₹)" value={catalogDraft.unit_price} onChange={e => setCatalogDraft({ ...catalogDraft, unit_price: e.target.value })} />
+              <div className="calc-btn-row" style={{ justifyContent: "flex-start", gridColumn: "1 / -1" }}>
+                <button className="calc-btn" onClick={saveCatalogItem}>{catalogEditId !== null ? "Update Item" : "Save Item"}</button>
+                {catalogEditId !== null && <button className="btn-secondary" onClick={resetCatalogDraft}>Cancel</button>}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1323,7 +2063,7 @@ function BessAppAdminPage({ auth, authHeaders, onLogout }) {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`${API_BASE}/bess-app-admin`, {
+      const res = await fetch(`${API_BASE}/api/admin/panel`, {
         headers: {
           ...authHeaders(),
         },
@@ -1345,7 +2085,7 @@ function BessAppAdminPage({ auth, authHeaders, onLogout }) {
   const createAdmin = async (e) => {
     e.preventDefault();
     setError("");
-    const res = await fetch(`${API_BASE}/bess-app-admin`, {
+    const res = await fetch(`${API_BASE}/api/admin/panel`, {
       method: "POST",
       headers: {
         ...authHeaders(),
@@ -1363,20 +2103,21 @@ function BessAppAdminPage({ auth, authHeaders, onLogout }) {
     loadAdmins();
   };
 
-  if (auth?.user?.role !== "admin") {
-    return (
-      <div className="auth-shell">
-        <div className="auth-card">
-          <h2>Access Denied</h2>
-          <p>Only admin users can access /bess-app-admin.</p>
-          <div className="calc-btn-row" style={{ justifyContent: "flex-start" }}>
-            <button className="btn-secondary" onClick={goHome}>Return to Home</button>
-          </div>
-          <button className="calc-btn" onClick={onLogout}>Logout</button>
-        </div>
-      </div>
-    );
-  }
+  // Allow both user and admin to access admin page
+  // if (auth?.user?.role !== "admin") {
+  //   return (
+  //     <div className="auth-shell">
+  //       <div className="auth-card">
+  //         <h2>Access Denied</h2>
+  //         <p>Only admin users can access /bess-app-admin.</p>
+  //         <div className="calc-btn-row" style={{ justifyContent: "flex-start" }}>
+  //           <button className="btn-secondary" onClick={goHome}>Return to Home</button>
+  //         </div>
+  //         <button className="calc-btn" onClick={onLogout}>Logout</button>
+  //       </div>
+  //     </div>
+  //   );
+  // }
 
   return (
     <div className="auth-shell">
@@ -1450,6 +2191,149 @@ function EmptyState({ message }) {
   );
 }
 
+// ── Tab: Admin Panel (admin-only) ─────────────────────────────────────────────
+function AdminPanelTab({ authHeaders, onUnauthorized }) {
+  const [admins, setAdmins] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [successMsg, setSuccessMsg] = useState("");
+
+  const flash = (msg) => { setSuccessMsg(msg); setTimeout(() => setSuccessMsg(""), 3000); };
+
+  const loadUsers = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/panel`, { headers: authHeaders() });
+      if (res.status === 401) { onUnauthorized?.(); return; }
+      if (!res.ok) throw new Error("Failed to load users");
+      const data = await res.json();
+      setAdmins(data.admins || []);
+      setUsers(data.users || []);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadUsers(); }, []);
+
+  const createAdmin = async (e) => {
+    e.preventDefault();
+    setError("");
+    const res = await fetch(`${API_BASE}/api/admin/panel`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) { setError(data.detail || "Failed to create admin"); return; }
+    setEmail(""); setPassword("");
+    await loadUsers();
+    flash("Admin account created.");
+  };
+
+  const toggleActive = async (userId, isActive) => {
+    const res = await fetch(`${API_BASE}/api/admin/users/${userId}`, {
+      method: "PATCH",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ is_active: !isActive }),
+    });
+    if (!res.ok) { setError("Failed to update user"); return; }
+    await loadUsers();
+    flash(isActive ? "User deactivated." : "User activated.");
+  };
+
+  return (
+    <div className="tab-content">
+      {error && <div className="error-bar">{error}</div>}
+      {successMsg && <div className="success-bar">{successMsg}</div>}
+
+      <div className="kpi-row">
+        <KPICard label="Admin Accounts" value={admins.length} accent="amber" />
+        <KPICard label="User Accounts" value={users.length} accent="blue" />
+        <KPICard label="Total" value={admins.length + users.length} accent="green" />
+      </div>
+
+      {/* Create admin form */}
+      <div className="card" style={{ marginBottom: "1rem" }}>
+        <div className="card-title">Create Admin Account</div>
+        <form onSubmit={createAdmin}>
+          <div className="two-col">
+            <div>
+              <label className="input-label">Email</label>
+              <input className="inp" type="email" value={email} onChange={e => setEmail(e.target.value)} required placeholder="admin@elektronre.com" />
+            </div>
+            <div>
+              <label className="input-label">Password</label>
+              <input className="inp" type="password" value={password} onChange={e => setPassword(e.target.value)} required placeholder="••••••••" />
+            </div>
+          </div>
+          <div className="calc-btn-row" style={{ justifyContent: "flex-start", marginTop: "0.75rem" }}>
+            <button className="calc-btn" type="submit">Create Admin</button>
+          </div>
+        </form>
+      </div>
+
+      {/* Admin accounts */}
+      <div className="card" style={{ marginBottom: "1rem" }}>
+        <div className="card-title">Admin Accounts</div>
+        {loading ? <div className="loading-msg">Loading…</div> : (
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead><tr><th>ID</th><th>Email</th><th>Username</th><th>Created</th></tr></thead>
+              <tbody>
+                {admins.map(a => (
+                  <tr key={a.id}>
+                    <td>#{a.id}</td>
+                    <td>{a.email}</td>
+                    <td>{a.username || "—"}</td>
+                    <td>{a.created_at ? new Date(a.created_at).toLocaleDateString("en-IN") : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* User accounts */}
+      <div className="card">
+        <div className="card-title">User Accounts</div>
+        {loading ? <div className="loading-msg">Loading…</div> : users.length === 0 ? (
+          <div className="empty-msg">No user accounts yet.</div>
+        ) : (
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead><tr><th>ID</th><th>Email</th><th>Username</th><th>Status</th><th>Actions</th></tr></thead>
+              <tbody>
+                {users.map(u => (
+                  <tr key={u.id}>
+                    <td>#{u.id}</td>
+                    <td>{u.email}</td>
+                    <td>{u.username || "—"}</td>
+                    <td><span className={u.is_active ? "pos" : ""} style={{ fontWeight: 600 }}>{u.is_active ? "Active" : "Inactive"}</span></td>
+                    <td>
+                      <button className="edit-btn"
+                        style={{ background: u.is_active ? "#dc2626" : "#16a34a" }}
+                        onClick={() => toggleActive(u.id, u.is_active)}>
+                        {u.is_active ? "Deactivate" : "Activate"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── App Root ─────────────────────────────────────────────────────────────────
 export default function BESSApp() {
   const [activeTab, setActiveTab] = useState("Project Wizard");
@@ -1463,26 +2347,21 @@ export default function BESSApp() {
   const [isEditingHistory, setIsEditingHistory] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const profileMenuRef = useRef(null);
-  const [auth, setAuth] = useState(() => {
-    try {
-      const raw = localStorage.getItem("bess-auth");
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
-  });
+  const { user, isAuthenticated, logout } = useAuthStore();
+  const navigate = useNavigate();
 
   const authHeaders = useCallback(() => {
-    if (!auth?.token) return {};
-    return { Authorization: `Bearer ${auth.token}` };
-  }, [auth]);
+    if (!user?.token) return {};
+    return { Authorization: `Bearer ${user.token}` };
+  }, [user]);
 
-  const tabs = BASE_TABS;
+  const isAdmin = user?.is_admin || user?.role === "admin";
+  const tabs = isAdmin ? ADMIN_TABS : USER_TABS;
 
   const handleUnauthorized = useCallback(() => {
-    setError("Session expired or unauthorized for that page.");
-    setActiveTab("Project Wizard");
-  }, []);
+    logout();
+    navigate('/login');
+  }, [logout, navigate]);
 
   const handleCalculate = useCallback(async () => {
     setLoading(true);
@@ -1493,11 +2372,8 @@ export default function BESSApp() {
         headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify(inputs),
       });
-      if (res.status === 401) {
-        handleUnauthorized();
-        return;
-      }
-      if (!res.ok) throw new Error(`API error ${res.status}`);
+      if (res.status === 401) { handleUnauthorized(); return; }
+      if (!res.ok) throw new Error(`Calculation failed: ${res.status}`);
       const data = await res.json();
       setResult({ ...data, inputs });
       setCalcId(data.id);
@@ -1544,27 +2420,10 @@ export default function BESSApp() {
     }
   }, [authHeaders, handleUnauthorized]);
 
-  const handleAuthenticated = useCallback((data) => {
-    setError(null);
-    setResult(null);
-    setCalcId(null);
-    setProjectId(null);
-    setEditInputs(null);
-    setIsEditingHistory(false);
-    setActiveTab("Project Wizard");
-    setAuth(data);
-    localStorage.setItem("bess-auth", JSON.stringify(data));
-
-    // Hard refresh clears stale in-memory unauthorized UI state when switching accounts.
-    if (typeof window !== "undefined") {
-      window.location.reload();
-    }
-  }, []);
-
   const handleLogout = useCallback(() => {
-    setAuth(null);
-    localStorage.removeItem("bess-auth");
-  }, []);
+    logout();
+    navigate('/login');
+  }, [logout, navigate]);
 
   const isBessAppAdminRoute = typeof window !== "undefined" && window.location.pathname === "/bess-app-admin";
 
@@ -1582,12 +2441,18 @@ export default function BESSApp() {
     };
   }, [isProfileOpen]);
 
-  if (!auth?.token) {
-    return <AuthPage onAuthenticated={handleAuthenticated} loginType={isBessAppAdminRoute ? "admin" : "user"} />;
+  useEffect(() => {
+    if (!isAuthenticated) {
+      navigate('/login');
+    }
+  }, [isAuthenticated, navigate]);
+
+  if (!isAuthenticated) {
+    return null;
   }
 
   if (isBessAppAdminRoute) {
-    return <BessAppAdminPage auth={auth} authHeaders={authHeaders} onLogout={handleLogout} />;
+    return <BessAppAdminPage auth={user} authHeaders={authHeaders} onLogout={handleLogout} />;
   }
 
   return (
@@ -1610,14 +2475,16 @@ export default function BESSApp() {
           </div>
         </div>
         <div className="header-right">
-          <span className="role-badge">{auth.user?.role || "user"}</span>
+          <span className={`role-badge ${isAdmin ? "role-badge-admin" : "role-badge-user"}`}>
+            {isAdmin ? "Admin" : "User"}
+          </span>
           <div className="profile-menu-wrap" ref={profileMenuRef}>
             <button className="profile-icon-btn" onClick={() => setIsProfileOpen(v => !v)} aria-label="Open profile menu">
               <span className="profile-icon">👤</span>
             </button>
             {isProfileOpen && (
               <div className="profile-menu">
-                <div className="profile-email">{auth.user?.email}</div>
+                <div className="profile-email">{user?.email}</div>
                 <button className="profile-logout-btn" onClick={handleLogout}>Logout</button>
               </div>
             )}
@@ -1656,7 +2523,7 @@ export default function BESSApp() {
       <main className="app-main">
         {activeTab === "Project Wizard" && (
           <ProjectWizard
-            authToken={auth.token}
+            authToken={user?.token}
             initialInputs={editInputs}
             isEditMode={isEditingHistory}
             onCancelEdit={() => {
@@ -1675,10 +2542,11 @@ export default function BESSApp() {
           />
         )}
         {activeTab === "Configurations" && <ConfigurationsTab projectId={projectId} authHeaders={authHeaders} onProjectResolved={setProjectId} onUnauthorized={handleUnauthorized} />}
-        {activeTab === "Supplier Engine" && <SupplierEngineTab authHeaders={authHeaders} onUnauthorized={handleUnauthorized} />}
-        {activeTab === "BOM Viewer" && <BOMTab isAdmin={auth.user?.role === "admin"} authHeaders={authHeaders} />}
+        {activeTab === "Supplier Engine" && <SupplierEngineTab isAdmin={isAdmin} authHeaders={authHeaders} onUnauthorized={handleUnauthorized} />}
+        {activeTab === "BOM Viewer" && <BOMTab isAdmin={isAdmin} authHeaders={authHeaders} result={result} />}
         {activeTab === "Analytics" && <AnalyticsTab data={result} />}
         {activeTab === "History" && <HistoryTab onLoad={handleLoadHistory} onEdit={handleEditHistory} authHeaders={authHeaders} onUnauthorized={handleUnauthorized} />}
+        {activeTab === "Admin Panel" && isAdmin && <AdminPanelTab authHeaders={authHeaders} onUnauthorized={handleUnauthorized} />}
       </main>
 
       <footer className="app-footer">

@@ -1,11 +1,9 @@
 import type { CalculationResult } from "../types";
-
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+import { fetchWithAuth } from "./client";
 
 export async function runCalculation(inputs: any): Promise<CalculationResult> {
-  const res = await fetch(`${API_BASE}/api/calculate`, {
+  const res = await fetchWithAuth(`/api/calculate`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(inputs),
   });
   if (!res.ok) throw new Error(`Calculation failed: ${res.status}`);
@@ -13,13 +11,13 @@ export async function runCalculation(inputs: any): Promise<CalculationResult> {
 }
 
 export async function fetchCalculations() {
-  const res = await fetch(`${API_BASE}/api/calculations`);
+  const res = await fetchWithAuth(`/api/calculations`);
   if (!res.ok) throw new Error("Failed to fetch calculations");
   return res.json();
 }
 
 export async function fetchCalculation(id: number): Promise<CalculationResult> {
-  const res = await fetch(`${API_BASE}/api/calculations/${id}`);
+  const res = await fetchWithAuth(`/api/calculations/${id}`);
   if (!res.ok) throw new Error("Failed to fetch calculation");
   return res.json();
 }

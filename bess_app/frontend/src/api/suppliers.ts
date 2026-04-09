@@ -1,17 +1,15 @@
 import type { Supplier, ScoringWeights } from "../types";
-
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+import { fetchWithAuth } from "./client";
 
 export async function fetchSuppliers(): Promise<Supplier[]> {
-  const res = await fetch(`${API_BASE}/api/suppliers`);
+  const res = await fetchWithAuth(`/api/suppliers`);
   if (!res.ok) throw new Error("Failed to fetch suppliers");
   return res.json();
 }
 
 export async function addSupplier(data: Partial<Supplier>) {
-  const res = await fetch(`${API_BASE}/api/suppliers`, {
+  const res = await fetchWithAuth(`/api/suppliers`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
   if (!res.ok) throw new Error("Failed to add supplier");
@@ -19,9 +17,8 @@ export async function addSupplier(data: Partial<Supplier>) {
 }
 
 export async function scoreSupplier(supplierId: number, scores: Record<string, number>, weights: ScoringWeights) {
-  const res = await fetch(`${API_BASE}/api/suppliers/${supplierId}/score`, {
+  const res = await fetchWithAuth(`/api/suppliers/${supplierId}/score`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...scores, weights }),
   });
   if (!res.ok) throw new Error("Failed to score supplier");
@@ -29,15 +26,14 @@ export async function scoreSupplier(supplierId: number, scores: Record<string, n
 }
 
 export async function fetchScoringWeights(): Promise<{ weights: ScoringWeights }> {
-  const res = await fetch(`${API_BASE}/api/scoring-weights`);
+  const res = await fetchWithAuth(`/api/scoring-weights`);
   if (!res.ok) throw new Error("Failed to fetch scoring weights");
   return res.json();
 }
 
 export async function saveScoringWeights(weights: ScoringWeights) {
-  const res = await fetch(`${API_BASE}/api/scoring-weights`, {
+  const res = await fetchWithAuth(`/api/scoring-weights`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ weights }),
   });
   if (!res.ok) throw new Error("Failed to save scoring weights");
