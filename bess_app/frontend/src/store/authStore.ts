@@ -35,7 +35,7 @@ export const useAuthStore = create<AuthState>()(
       login: async (email: string, password: string) => {
         set({ isLoading: true, error: null });
         try {
-          const res = await fetch(`/api/auth/login`, {
+          const res = await fetch(`${import.meta.env.VITE_API_URL || "https://roi-tool-6phy.onrender.com"}/api/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, password }),
@@ -62,7 +62,7 @@ export const useAuthStore = create<AuthState>()(
       signup: async (data) => {
         set({ isLoading: true, error: null });
         try {
-          const res = await fetch(`/api/auth/signup`, {
+          const res = await fetch(`${import.meta.env.VITE_API_URL || "https://roi-tool-6phy.onrender.com"}/api/auth/signup`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data),
