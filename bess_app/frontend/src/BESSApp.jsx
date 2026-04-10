@@ -951,7 +951,7 @@ function AnalyticsTab({ data }) {
     const sections = [];
 
     // Project Information
-    sections.push(["BESS COMPREHENSIVE PROJECT REPORT"], ["Generated:", r.reportDate], [""], [""]];
+    sections.push(["BESS COMPREHENSIVE PROJECT REPORT"], ["Generated:", r.reportDate], [""], [""]);
 
     // Project Wizard Inputs
     sections.push(["PROJECT WIZARD INPUTS"], [""]];
