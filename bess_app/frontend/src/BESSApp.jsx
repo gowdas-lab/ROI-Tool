@@ -4,7 +4,7 @@ import { ProjectWizard } from "./pages";
 import { useAuthStore } from "./store/authStore";
 import { useNavigate } from "react-router-dom";
 
-const API_BASE = import.meta.env.VITE_API_URL or "https://roi-tool-6phy.onrender.com";
+const API_BASE = import.meta.env.VITE_API_URL || "https://roi-tool-6phy.onrender.com";
 
 const fmt = (n, decimals = 0) =>
   n == null ? "—" : Number(n).toLocaleString("en-IN", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
