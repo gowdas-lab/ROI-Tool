@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import "./BESSApp.css";
 import { ProjectWizard } from "./pages";
 import { useAuthStore } from "./store/authStore";
@@ -170,7 +170,7 @@ function InputsTab({ inputs, onChange, onCalculate, loading }) {
       <div className="calc-btn-row">
         <button className="calc-btn" onClick={onCalculate} disabled={loading}>
           {loading ? <span className="spinner" /> : null}
-          {loading ? "Calculating…" : "⚡ Run Optimisation"}
+          {loading ? "Calculating…" : "Run Optimisation"}
         </button>
       </div>
     </div>
@@ -954,7 +954,7 @@ function AnalyticsTab({ data }) {
     sections.push(["BESS COMPREHENSIVE PROJECT REPORT"], ["Generated:", r.reportDate], [""], [""]);
 
     // Project Wizard Inputs
-    sections.push(["PROJECT WIZARD INPUTS"], [""]];
+    sections.push(["PROJECT WIZARD INPUTS"], [""]);
     sections.push(["Parameter", "Value"]);
     if (r.projectInputs) {
       sections.push(["Peak Demand (kW)", r.projectInputs.peak_demand_kw]);
@@ -971,7 +971,7 @@ function AnalyticsTab({ data }) {
     sections.push([""], [""]);
 
     // Sizing Summary
-    sections.push(["SYSTEM SIZING"], [""]]);
+    sections.push(["SYSTEM SIZING"], [""]);
     sections.push(["Parameter", "Value"]);
     if (r.sizing) {
       sections.push(["BESS Capacity (kWh)", r.sizing.bess_kwh]);
@@ -984,7 +984,7 @@ function AnalyticsTab({ data }) {
     sections.push([""], [""]);
 
     // CAPEX Breakdown
-    sections.push(["CAPITAL EXPENDITURE (CAPEX)"], [""]]);
+    sections.push(["CAPITAL EXPENDITURE (CAPEX)"], [""]);
     sections.push(["Item", "Value (INR)"]);
     if (r.capex) {
       sections.push(["Battery Cost", r.capex.battery_cost]);
@@ -997,7 +997,7 @@ function AnalyticsTab({ data }) {
     sections.push([""], [""]);
 
     // OPEX Breakdown
-    sections.push(["OPERATIONAL EXPENDITURE (OPEX) - Annual"], [""]]);
+    sections.push(["OPERATIONAL EXPENDITURE (OPEX) - Annual"], [""]);
     sections.push(["Item", "Value (INR/year)"]);
     if (r.opex) {
       sections.push(["Battery Replacement", r.opex.battery_replacement]);
@@ -1009,7 +1009,7 @@ function AnalyticsTab({ data }) {
     sections.push([""], [""]);
 
     // Analytics Summary
-    sections.push(["FINANCIAL ANALYTICS"], [""]]);
+    sections.push(["FINANCIAL ANALYTICS"], [""]);
     sections.push(["Metric", "Value"]);
     if (r.lcos) sections.push(["LCOS", `${fmt(r.lcos.lcos_inr_per_kwh, 2)} INR/kWh`]);
     if (r.roi) {
@@ -1024,7 +1024,7 @@ function AnalyticsTab({ data }) {
 
     // Cash Flow
     if (r.cashflow_years && r.cashflow_years.length > 0) {
-      sections.push(["10-YEAR CASH FLOW PROJECTION"], [""]]);
+      sections.push(["10-YEAR CASH FLOW PROJECTION"], [""]);
       sections.push(["Year", "Revenue", "OPEX", "Net Cashflow", "Cumulative"]);
       r.cashflow_years.forEach(year => {
         sections.push([
@@ -1335,7 +1335,7 @@ function AnalyticsTab({ data }) {
             📊 Excel
           </button>
           <button className="load-btn" onClick={downloadCSV} title="Download CSV data file">
-            📋 CSV
+            CSV
           </button>
         </div>
         <p style={{ fontSize: "12px", color: "#8b949e", marginTop: "0.5rem" }}>
@@ -2184,7 +2184,7 @@ function BessAppAdminPage({ auth, authHeaders, onLogout }) {
 function EmptyState({ message }) {
   return (
     <div className="empty-state">
-      <div className="empty-icon">⚡</div>
+      <div className="empty-icon"></div>
       <div className="empty-text">{message || "Run an optimisation to see results"}</div>
       <div className="empty-sub">Set your inputs in the Project Wizard tab and click "Run Optimisation"</div>
     </div>
@@ -2345,9 +2345,16 @@ export default function BESSApp() {
   const [projectId, setProjectId] = useState(null);
   const [editInputs, setEditInputs] = useState(null);
   const [isEditingHistory, setIsEditingHistory] = useState(false);
-  const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const profileMenuRef = useRef(null);
+  const [theme, setTheme] = useState(() => localStorage.getItem("bess-theme") || "dark");
   const { user, isAuthenticated, logout } = useAuthStore();
+
+  const toggleTheme = useCallback(() => {
+    setTheme(t => {
+      const next = t === "dark" ? "light" : "dark";
+      localStorage.setItem("bess-theme", next);
+      return next;
+    });
+  }, []);
   const navigate = useNavigate();
 
   const authHeaders = useCallback(() => {
@@ -2428,20 +2435,6 @@ export default function BESSApp() {
   const isBessAppAdminRoute = typeof window !== "undefined" && window.location.pathname === "/bess-app-admin";
 
   useEffect(() => {
-    const handleOutsideClick = (event) => {
-      if (!isProfileOpen) return;
-      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target)) {
-        setIsProfileOpen(false);
-      }
-    };
-
-    document.addEventListener("mousedown", handleOutsideClick);
-    return () => {
-      document.removeEventListener("mousedown", handleOutsideClick);
-    };
-  }, [isProfileOpen]);
-
-  useEffect(() => {
     if (!isAuthenticated) {
       navigate('/login');
     }
@@ -2456,102 +2449,102 @@ export default function BESSApp() {
   }
 
   return (
-    <div className="bess-app">
-      <header className="app-header">
-        <div className="header-left">
-          <img 
-            src="/assets/elektron-logo.png" 
-            alt="Elektron" 
-            style={{
-              width: '40px',
-              height: '40px',
-              marginRight: '12px',
-              objectFit: 'contain'
-            }}
-          />
-          <div>
-            <div className="app-title">BESS Optimality</div>
-            <div className="app-subtitle">Sub-MWh Battery Storage Optimisation Tool · Elektron RE</div>
+    <div className={`bess-app ${theme}`}>
+      {/* Sidebar */}
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <img src="/assets/elektron-logo.png" alt="Elektron" className="sidebar-logo" />
+          <div style={{ flex: 1 }}>
+            <div className="sidebar-title">BESS Optimality</div>
+            <div className="sidebar-sub">Elektron RE</div>
           </div>
+          <button className="sidebar-theme-btn" onClick={toggleTheme} title="Toggle theme">
+            {theme === "dark" ? "Light" : "Dark"}
+          </button>
         </div>
-        <div className="header-right">
-          <span className={`role-badge ${isAdmin ? "role-badge-admin" : "role-badge-user"}`}>
-            {isAdmin ? "Admin" : "User"}
-          </span>
-          <div className="profile-menu-wrap" ref={profileMenuRef}>
-            <button className="profile-icon-btn" onClick={() => setIsProfileOpen(v => !v)} aria-label="Open profile menu">
-              <span className="profile-icon">👤</span>
+
+        <nav className="sidebar-nav">
+          {tabs.map(t => (
+            <button
+              key={t}
+              className={`sidebar-item ${activeTab === t ? "active" : ""}`}
+              onClick={() => setActiveTab(t)}
+            >
+              <span className="sidebar-label">{t}</span>
             </button>
-            {isProfileOpen && (
-              <div className="profile-menu">
-                <div className="profile-email">{user?.email}</div>
-                <button className="profile-logout-btn" onClick={handleLogout}>Logout</button>
-              </div>
-            )}
-          </div>
-          {calcId && <span className="calc-badge">Calc #{calcId}</span>}
+          ))}
+        </nav>
+
+        <div className="sidebar-footer">
           {result && (
-            <div className="header-kpis">
-              <div className="h-kpi"><span className="h-kpi-val">{result.sizing?.actual_installed_kwh} kWh</span><span className="h-kpi-label">Installed</span></div>
-              <div className="h-kpi"><span className="h-kpi-val">₹{fmt(result.lcos?.lcos_inr_per_kwh, 2)}</span><span className="h-kpi-label">LCOS/kWh</span></div>
-              <div className="h-kpi"><span className="h-kpi-val">{result.roi?.simple_payback_yrs} yrs</span><span className="h-kpi-label">Payback</span></div>
+            <div className="sidebar-kpis">
+              {calcId && <div className="sidebar-calc-badge">Calc #{calcId}</div>}
+              <div className="sidebar-kpi-row">
+                <span className="sidebar-kpi-label">Installed</span>
+                <span className="sidebar-kpi-val">{result.sizing?.actual_installed_kwh} kWh</span>
+              </div>
+              <div className="sidebar-kpi-row">
+                <span className="sidebar-kpi-label">LCOS</span>
+                <span className="sidebar-kpi-val">₹{fmt(result.lcos?.lcos_inr_per_kwh, 2)}/kWh</span>
+              </div>
+              <div className="sidebar-kpi-row">
+                <span className="sidebar-kpi-label">Payback</span>
+                <span className="sidebar-kpi-val">{result.roi?.simple_payback_yrs} yrs</span>
+              </div>
             </div>
           )}
-          <LogoutButton />
+          <div className="sidebar-user">
+            <span className={`role-badge ${isAdmin ? "role-badge-admin" : "role-badge-user"}`}>
+              {isAdmin ? "Admin" : "User"}
+            </span>
+            <span className="sidebar-email">{user?.email}</span>
+            <button className="sidebar-logout-btn" onClick={handleLogout}>Logout</button>
+          </div>
         </div>
-      </header>
+      </aside>
 
-      <nav className="tab-nav">
-        {tabs.map(t => (
-          <button
-            key={t}
-            className={`tab-btn ${activeTab === t ? "active" : ""}`}
-            onClick={() => setActiveTab(t)}
-          >
-            {t}
-          </button>
-        ))}
-      </nav>
-
-      {error && (
-        <div className="error-bar" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem" }}>
-          <span>⚠ {error} — Check API connection (FastAPI at port 8000)</span>
-          <button className="btn-secondary" onClick={() => setActiveTab("Project Wizard")}>Return to Home</button>
-        </div>
-      )}
-
-      <main className="app-main">
-        {activeTab === "Project Wizard" && (
-          <ProjectWizard
-            authToken={user?.token}
-            initialInputs={editInputs}
-            isEditMode={isEditingHistory}
-            onCancelEdit={() => {
-              setEditInputs(null);
-              setIsEditingHistory(false);
-            }}
-            onOptimizationComplete={({ result: calcResult, inputs: calcInputs, calcId: newCalcId, projectId: newProjectId }) => {
-              setResult({ ...calcResult, inputs: calcInputs });
-              setInputs(calcInputs);
-              setCalcId(newCalcId);
-              setProjectId(newProjectId);
-              setIsEditingHistory(false);
-              setEditInputs(null);
-              setActiveTab("Configurations");
-            }}
-          />
+      {/* Main content area */}
+      <div className="app-content">
+        {error && (
+          <div className="error-bar" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", borderRadius: 0, margin: 0 }}>
+            <span>{error} — Check API connection (FastAPI at port 8000)</span>
+            <button className="btn-secondary" onClick={() => setActiveTab("Project Wizard")}>Return to Home</button>
+          </div>
         )}
-        {activeTab === "Configurations" && <ConfigurationsTab projectId={projectId} authHeaders={authHeaders} onProjectResolved={setProjectId} onUnauthorized={handleUnauthorized} />}
-        {activeTab === "Supplier Engine" && <SupplierEngineTab isAdmin={isAdmin} authHeaders={authHeaders} onUnauthorized={handleUnauthorized} />}
-        {activeTab === "BOM Viewer" && <BOMTab isAdmin={isAdmin} authHeaders={authHeaders} result={result} />}
-        {activeTab === "Analytics" && <AnalyticsTab data={result} />}
-        {activeTab === "History" && <HistoryTab onLoad={handleLoadHistory} onEdit={handleEditHistory} authHeaders={authHeaders} onUnauthorized={handleUnauthorized} />}
-        {activeTab === "Admin Panel" && isAdmin && <AdminPanelTab authHeaders={authHeaders} onUnauthorized={handleUnauthorized} />}
-      </main>
 
-      <footer className="app-footer">
-        Elektron RE · BESS Optimality v2.0 · FastAPI + PostgreSQL + React · Permutation Engine + Supplier Scoring
-      </footer>
+        <main className="app-main">
+          {activeTab === "Project Wizard" && (
+            <ProjectWizard
+              authToken={user?.token}
+              initialInputs={editInputs}
+              isEditMode={isEditingHistory}
+              onCancelEdit={() => {
+                setEditInputs(null);
+                setIsEditingHistory(false);
+              }}
+              onOptimizationComplete={({ result: calcResult, inputs: calcInputs, calcId: newCalcId, projectId: newProjectId }) => {
+                setResult({ ...calcResult, inputs: calcInputs });
+                setInputs(calcInputs);
+                setCalcId(newCalcId);
+                setProjectId(newProjectId);
+                setIsEditingHistory(false);
+                setEditInputs(null);
+                setActiveTab("Configurations");
+              }}
+            />
+          )}
+          {activeTab === "Configurations" && <ConfigurationsTab projectId={projectId} authHeaders={authHeaders} onProjectResolved={setProjectId} onUnauthorized={handleUnauthorized} />}
+          {activeTab === "Supplier Engine" && <SupplierEngineTab isAdmin={isAdmin} authHeaders={authHeaders} onUnauthorized={handleUnauthorized} />}
+          {activeTab === "BOM Viewer" && <BOMTab isAdmin={isAdmin} authHeaders={authHeaders} result={result} />}
+          {activeTab === "Analytics" && <AnalyticsTab data={result} />}
+          {activeTab === "History" && <HistoryTab onLoad={handleLoadHistory} onEdit={handleEditHistory} authHeaders={authHeaders} onUnauthorized={handleUnauthorized} />}
+          {activeTab === "Admin Panel" && isAdmin && <AdminPanelTab authHeaders={authHeaders} onUnauthorized={handleUnauthorized} />}
+        </main>
+
+        <footer className="app-footer">
+          Elektron RE · BESS Optimality v2.0 · FastAPI + PostgreSQL + React · Permutation Engine + Supplier Scoring
+        </footer>
+      </div>
     </div>
   );
 }
